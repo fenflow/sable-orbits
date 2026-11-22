@@ -2,14 +2,23 @@ package space.sableorbit.mixin;
 
 import dev.ryanhcode.sable.network.udp.SableUDPServer;
 import dev.ryanhcode.sable.sublevel.system.SubLevelTrackingSystem;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import space.sableorbit.OrbitSpaces;
+import space.sableorbit.Spacewalk;
 
 @Mixin(value = SubLevelTrackingSystem.class, remap = false)
 public class TrackingMixin {
+    @Inject(method = "<init>", at = @At("RETURN"))
+    private void registerEvaClock(ServerLevel level, CallbackInfo ci) {
+        Spacewalk.trackInterpolation(level, (SubLevelTrackingSystem)(Object)this);
+    }
+
     // Movement packets address reusable plot indices. Order them with the respawn and
     // tracking packets when a player can cross an orbital dimension boundary.
     @Redirect(method = "sendMovementUpdates", at = @At(value = "INVOKE",

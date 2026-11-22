@@ -1,3 +1,6 @@
 {
-  "block.sableorbits.rocket_engine": "Rocket Engine"
+  "block.sableorbits.rocket_engine": "Rocket Engine",
+  "block.sableorbits.reaction_wheel": "Reaction Wheel",
+  "key.sableorbits.roll_left": "Roll left in zero gravity",
+  "key.sableorbits.roll_right": "Roll right in zero gravity"
 }

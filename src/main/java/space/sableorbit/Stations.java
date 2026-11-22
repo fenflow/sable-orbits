@@ -48,6 +48,12 @@ final class Stations {
     }
     static void tick(ServerLevel level) {
         Flight.settleArrivals(level);
+        if (OrbitSpaces.isolated(level)) {
+            for (var player : level.players()) {
+                Boarding.follow(player);
+                Spacewalk.tick(player);
+            }
+        }
         if (level.dimension().equals(Orbit.ORBIT)) Hooks.migrateLoaded(level);
         if (OrbitSpaces.isolated(level)) {
             for (var part : loaded(level)) if (root(part) == part) {
@@ -65,13 +71,18 @@ final class Stations {
         if (OrbitSpaces.isolated(level)) {
             if (level.getGameTime() % 20 != 0) return;
             for (var part : loaded(level)) {
-                if (!part.isRemoved() && root(part) == part) tickStation(part);
+                if (part.isRemoved()) continue;
+                StationMachines.restore(part);
+                if (root(part) == part) tickStation(part);
             }
             for (var player : List.copyOf(level.players())) playerFall(player);
         } else if (Orbit.levelOf(Orbit.bodyOf(level)).equals(level.dimension())) {
             var visited = new HashSet<ServerSubLevel>();
             for (var part : loaded(level)) {
-                if (part.isRemoved() || part.logicalPose().position().y < 2000 || visited.contains(part)) continue;
+                if (part.isRemoved()) continue;
+                if (level.getGameTime() % 20 == 0 && part.getUserDataTag() != null && part.getUserDataTag().contains("sableorbits_landed"))
+                    StationMachines.restore(part);
+                if (part.logicalPose().position().y < 2000 || visited.contains(part)) continue;
                 var parts = Flight.group(part);
                 visited.addAll(parts);
                 var crew = Flight.crew(parts);

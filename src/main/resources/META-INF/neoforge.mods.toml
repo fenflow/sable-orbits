@@ -3,7 +3,7 @@ loaderVersion="[4,)"
 license="All Rights Reserved"
 [[mods]]
 modId="sableorbits"
-version="0.1.7-alpha"
+version="0.2.2-alpha"
 displayName="Sable Orbits"
 description="Mobile orbital stations for NTM Continuum Space."
 [[mixins]]

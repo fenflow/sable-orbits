@@ -4,7 +4,7 @@ plugins {
 }
 if (providers.gradleProperty('flightWorld').isPresent()) layout.buildDirectory = file('build/flightTest')
 group = 'space.sableorbit'
-version = '0.1.7-alpha'
+version = '0.2.2-alpha'
 base.archivesName = 'sable-orbits'
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 neoForge {
@@ -25,6 +25,9 @@ neoForge.runs {
 }
 
 repositories { mavenCentral() }
+tasks.jar {
+    exclude 'space/sableorbit/StationGameTests*.class', 'data/sableorbits/structure/empty.nbt'
+}
 neoForge.runs {
     client { client(); gameDirectory = file('client-run') }
 }
@@ -54,7 +57,7 @@ if (providers.gradleProperty('flightWorld').isPresent()) {
             programArguments.addAll('--username','OrbitPilot','--quickPlayMultiplayer','127.0.0.1:25471')
         }
     }
-    tasks.jar { exclude 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class' }
+    tasks.jar { exclude 'space/sableorbit/AttitudeCheck*.class', 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/InertialCheck*.class', 'space/sableorbit/LaunchCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class' }
 }
 
 

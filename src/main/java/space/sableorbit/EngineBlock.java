@@ -24,6 +24,7 @@ final class EngineBlock extends Block implements EntityBlock, IFluidConnectorBlo
     @Override protected RenderShape getRenderShape(BlockState state) { return RenderShape.ENTITYBLOCK_ANIMATED; }
     @Override public BlockEntity newBlockEntity(BlockPos pos, BlockState state) { return new EngineTile(pos,state); }
     @Override public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
+        if (level.isClientSide || type != Engines.TILE.get()) return null;
         return (l,p,s,t) -> ((EngineTile)t).tick();
     }
     @Override public net.minecraft.world.item.ItemStack getCloneItemStack(LevelReader level, BlockPos pos, BlockState state) {

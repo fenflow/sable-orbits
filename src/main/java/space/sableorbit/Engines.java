@@ -24,9 +24,18 @@ final class Engines {
     static final Supplier<EngineBlock> BLOCK = BLOCKS.register("rocket_engine", () -> new EngineBlock());
     static final Supplier<BlockEntityType<EngineTile>> TILE = TYPES.register("rocket_engine",
         () -> BlockEntityType.Builder.of(EngineTile::new,BLOCK.get()).build(null));
+    static final Supplier<ReactionWheelBlock> WHEEL = BLOCKS.register("reaction_wheel", ReactionWheelBlock::new);
+    static final Supplier<BlockEntityType<ReactionWheelTile>> WHEEL_TILE = TYPES.register("reaction_wheel",
+        () -> BlockEntityType.Builder.of(ReactionWheelTile::new, WHEEL.get()).build(null));
+    private static final DeferredRegister.Items ITEMS = DeferredRegister.createItems("sableorbits");
+    private static final Supplier<net.minecraft.world.item.BlockItem> WHEEL_ITEM = ITEMS.registerSimpleBlockItem("reaction_wheel", WHEEL);
     static void register(IEventBus bus) {
         BLOCKS.register(bus);
         TYPES.register(bus);
+        ITEMS.register(bus);
+        bus.addListener((net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) -> {
+            if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS) event.accept(WHEEL_ITEM.get());
+        });
         bus.addListener((RegisterCapabilitiesEvent e) -> e.registerBlockEntity(Capabilities.FluidHandler.BLOCK, TILE.get(),
             (be, side) -> be.inlet(side) ? be : null));
     }
@@ -89,8 +98,7 @@ final class Engines {
                 tile.initialize(part,first.subtract(cell));
                 level.sendBlockUpdated(cell,tile.getBlockState(),tile.getBlockState(),Block.UPDATE_CLIENTS);
             }
-            level.invalidateCapabilities(first);
-            com.hbm.blocks.network.BlockFluidDuct.portChanged(level,first.relative(nozzle.getOpposite()));
+            ((EngineTile)level.getBlockEntity(first)).refreshFluidPorts();
             level.updateNeighborsAt(first,BLOCK.get());
             level.getBlockState(first).updateNeighbourShapes(level,first,Block.UPDATE_ALL);
             item.consume(1,player);

@@ -15,7 +15,14 @@ public class SableOrbits {
     public SableOrbits(net.neoforged.bus.api.IEventBus bus) {
         ConsoleMenus.MENUS.register(bus);
         Engines.register(bus);
+        Attitude.register(bus);
+        GravityFrame.register(bus);
+        LaunchMotion.TYPES.register(bus);
+        bus.addListener(FlightVelocity::register);
+        bus.addListener(Boarding::register);
+        bus.addListener(EvaMove::register);
         Stations.initialize();
+        NeoForge.EVENT_BUS.addListener(Attitude::tick);
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.tick.ServerTickEvent.Post e) -> StationLife.tick(e.getServer()));
         NeoForge.EVENT_BUS.addListener(StationCommand::register);
         NeoForge.EVENT_BUS.addListener(Engines::place);
@@ -23,6 +30,8 @@ public class SableOrbits {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerChangedDimensionEvent e) -> {
             if (e.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
                 Stations.forgetSky(player);
+                Spacewalk.forget(player);
+                Attitude.reset(player);
                 var previous = player.serverLevel().getServer().getLevel(e.getFrom());
                 if (OrbitSpaces.isolated(player.level()) || (previous != null && OrbitSpaces.isolated(previous)))
                     player.getPersistentData().putLong("sableorbits_ordered_until", player.serverLevel().getServer().overworld().getGameTime() + 60);

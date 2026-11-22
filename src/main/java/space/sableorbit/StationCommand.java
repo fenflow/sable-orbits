@@ -48,8 +48,7 @@ final class StationCommand {
                     if(hit.isEmpty()) continue;
                     var feet=pose.transformPosition(hit.get()).add(0,.015,0);
                     if(!level.noCollision(player,player.getBoundingBox().move(feet.subtract(player.position())))) continue;
-                    player.teleportTo(level,feet.x,feet.y,feet.z,player.getYRot(),player.getXRot());
-                    player.setDeltaMovement(Vec3.ZERO); player.fallDistance=0;
+                    Boarding.arrive(player,node.part(),feet,true);
                     return true;
                 }
             }
@@ -59,8 +58,7 @@ final class StationCommand {
         if(bounds!=null) {
             var position=new Vec3(bounds.getCenter().x,bounds.maxY+.1,bounds.getCenter().z);
             if(level.noCollision(player,player.getBoundingBox().move(position.subtract(player.position())))) {
-                player.teleportTo(level,position.x,position.y,position.z,player.getYRot(),player.getXRot());
-                player.setDeltaMovement(Vec3.ZERO); player.fallDistance=0;
+                Boarding.arrive(player,root,position,false);
                 return true;
             }
         }

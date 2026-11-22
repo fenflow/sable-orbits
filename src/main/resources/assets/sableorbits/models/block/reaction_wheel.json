@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/block",
+  "loader": "neoforge:obj",
+  "model": "sableorbits:models/block/reaction_wheel.obj",
+  "automatic_culling": false,
+  "textures": {"particle": "minecraft:block/smooth_stone"}
+}

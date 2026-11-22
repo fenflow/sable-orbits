@@ -10,7 +10,12 @@ import net.minecraft.world.phys.Vec3;
 
 final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
     private final RocketPronter models = new RocketPronter();
-    @Override public AABB getRenderBoundingBox(EngineTile tile) { return tile.bounds(); }
+    @Override public AABB getRenderBoundingBox(EngineTile tile) {
+        var bounds = tile.bounds();
+        if (!tile.isBurning() || tile.engine() == null) return bounds;
+        var direction = tile.getBlockState().getValue(EngineBlock.FACING);
+        return bounds.expandTowards(Vec3.atLowerCornerOf(direction.getNormal()).scale(EnginePlume.maxLength(tile.engine())));
+    }
     @Override public void render(EngineTile tile,float tick,PoseStack pose,MultiBufferSource buffers,int light,int overlay) {
         var part = tile.engine();
         if (part == null || !tile.isMaster()) return;
@@ -19,10 +24,11 @@ final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
         pose.pushPose();
         pose.translate(center.x,center.y,center.z);
         pose.mulPose(tile.getBlockState().getValue(EngineBlock.FACING).getOpposite().getRotation());
+        pose.pushPose();
         if (part.getModel(false) != null && part.skin() != null) {
             WavefrontObj mesh = models.mesh(part.getModel(false));
             float[] min = mesh.boundsMin(), max = mesh.boundsMax();
-            float width = (float)Math.max(1,Math.max(part.topRadius(),part.bottomRadius()));
+            float width = EnginePlume.modelWidth(part);
             float horizontal = width / Math.max(0.001f,Math.max(max[0]-min[0],max[2]-min[2]));
             pose.scale(horizontal,(float)part.height()/Math.max(0.001f,max[1]-min[1]),horizontal);
             pose.translate(-(min[0]+max[0])/2,-(min[1]+max[1])/2,-(min[2]+max[2])/2);
@@ -30,6 +36,11 @@ final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
         } else {
             net.minecraft.client.Minecraft.getInstance().getItemRenderer().renderStatic(new net.minecraft.world.item.ItemStack(part.item()),
                 net.minecraft.world.item.ItemDisplayContext.FIXED,light,overlay,pose,buffers,tile.getLevel(),0);
+        }
+        pose.popPose();
+        if (tile.isBurning()) {
+            float time = (tile.getLevel().getGameTime() % 24000) + tick;
+            EnginePlume.render(part, pose, buffers, time, tile.getBlockPos().hashCode() & 255);
         }
         pose.popPose();
     }

@@ -37,6 +37,9 @@ public final class OrbitSpaces extends SavedData {
     public static boolean isolated(Level level) {
         return level.dimension().location().getNamespace().equals("sableorbits");
     }
+    public static boolean unoccupied(Level level) {
+        return level instanceof ServerLevel server && isolated(server) && server.players().isEmpty();
+    }
     static void restore(MinecraftServer server) {
         for (String name : List.copyOf(data(server).names)) open(server, name);
     }

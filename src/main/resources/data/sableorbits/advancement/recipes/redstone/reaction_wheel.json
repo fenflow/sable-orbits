@@ -1,0 +1,15 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_motor": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {"items": [{"items": "hbm:motor"}]}
+    },
+    "has_recipe": {
+      "trigger": "minecraft:recipe_unlocked",
+      "conditions": {"recipe": "sableorbits:reaction_wheel"}
+    }
+  },
+  "requirements": [["has_motor", "has_recipe"]],
+  "rewards": {"recipes": ["sableorbits:reaction_wheel"]}
+}

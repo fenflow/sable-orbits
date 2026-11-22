@@ -1,0 +1,8 @@
+newmtl housing
+map_Kd minecraft:block/smooth_stone
+
+newmtl rim
+map_Kd minecraft:block/iron_block
+
+newmtl socket
+map_Kd minecraft:block/polished_deepslate

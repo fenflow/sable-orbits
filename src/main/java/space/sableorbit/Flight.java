@@ -131,6 +131,7 @@ final class Flight {
         }
 
         var loaded = new ArrayList<ServerSubLevel>();
+        var indexed = new ArrayList<ServerSubLevel>();
         var inserted = new ArrayList<Entity>();
         try {
             var ids = parts.stream().map(ServerSubLevel::getUniqueId).toList();
@@ -157,6 +158,10 @@ final class Flight {
                 }
                 loaded.add(copy);
             }
+            for (var copy : loaded) {
+                indexed.add(copy);
+                StationMachines.restore(copy);
+            }
             if (WIRES) ShipWires.write(target,wireLinks);
             for (var entity : replacements.values()) {
                 if (!target.addFreshEntity(entity)) throw new IllegalStateException("Entity transfer rejected");
@@ -165,6 +170,7 @@ final class Flight {
         } catch (RuntimeException ex) {
             if (WIRES) ShipWires.clear(target,wireLinks);
             inserted.forEach(Entity::discard);
+            indexed.forEach(StationMachines::depart);
             for (var part : parts) {
                 var copy = destination.getSubLevel(part.getUniqueId());
                 if (copy != null) destination.removeSubLevel(copy, SubLevelRemovalReason.REMOVED);
@@ -198,7 +204,10 @@ final class Flight {
             if (mount != null) replacements.get(rider).startRiding(replacements.get(mount), true);
         });
         if (WIRES) ShipWires.clear(origin,wireLinks);
-        for (var part : parts) source.removeSubLevel(part, SubLevelRemovalReason.REMOVED);
+        for (var part : parts) {
+            StationMachines.depart(part);
+            source.removeSubLevel(part, SubLevelRemovalReason.REMOVED);
+        }
         for(var copy:loaded) {
             Stations.track(copy);
             StationLife.remember(copy,Stations.info(copy));

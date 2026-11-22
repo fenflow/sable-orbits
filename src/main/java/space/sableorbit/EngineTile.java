@@ -28,6 +28,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     private FluidTankNTM[] tanks = {};
     private int solid;
     private boolean burning;
+    private boolean refreshPortsOnTick;
     private List<BlockPos> cells = List.of();
     EngineTile(BlockPos pos, BlockState state) { super(Engines.TILE.get(),pos,state); }
     void initialize(RocketPart part, BlockPos toCore) {
@@ -43,6 +44,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     }
     RocketPart engine() { return engine; }
     boolean isMaster() { return offset.equals(BlockPos.ZERO); }
+    boolean isBurning() { return burning; }
     net.minecraft.world.phys.AABB bounds() {
         if (cells.isEmpty()) return new net.minecraft.world.phys.AABB(worldPosition);
         return new net.minecraft.world.phys.AABB(cells.getFirst()).minmax(new net.minecraft.world.phys.AABB(cells.getLast()));
@@ -52,7 +54,23 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         return net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket.create(this);
     }
     private Direction nozzle() { return getBlockState().getValue(EngineBlock.FACING); }
-    boolean inlet(Direction side) { return engine != null && offset.equals(BlockPos.ZERO) && side == nozzle().getOpposite(); }
+    boolean inlet(Direction side) {
+        if (side == null || engine == null || !isMaster()) return false;
+        Direction exhaust = nozzle();
+        return side == exhaust.getOpposite() || (tanks.length > 1 && side.getAxis() != exhaust.getAxis());
+    }
+    @Override public void onLoad() {
+        super.onLoad();
+        // Ducts in an existing save may still have the old, closed side connection cached.
+        refreshPortsOnTick = isMaster() && tanks.length > 1;
+    }
+    void refreshFluidPorts() {
+        refreshPortsOnTick = false;
+        level.invalidateCapabilities(worldPosition);
+        for (Direction side : Direction.values()) {
+            if (inlet(side)) com.hbm.blocks.network.BlockFluidDuct.portChanged(level, worldPosition.relative(side));
+        }
+    }
     @Override public boolean isLoaded() { return level != null && !isRemoved(); }
     @Override public boolean canConnect(FluidType fluid, ForgeDirection side) {
         return side != null && inlet(side.toDirection()) && Arrays.stream(tanks).anyMatch(t -> t.joins(fluid));
@@ -60,6 +78,11 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     @Override public boolean exposesFluidContact(FluidType f, ForgeDirection d, boolean output) { return !output && canConnect(f,d); }
     @Override public FluidTankNTM[] getAllTanks() { return tanks; }
     @Override public FluidTankNTM[] getReceivingTanks() { return tanks; }
+    @Override public long transferFluid(FluidType fluid, int pressure, long amount) {
+        long remaining = IFluidStandardReceiverMK2.super.transferFluid(fluid, pressure, amount);
+        if (remaining < amount) setChanged();
+        return remaining;
+    }
     @Override public int getTanks() { return tanks.length; }
     @Override public FluidStack getFluidInTank(int i) {
         if (tanks[i].getFill() == 0 || tanks[i].getFluid().getFluid() == null) return FluidStack.EMPTY;
@@ -95,11 +118,8 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
                 && cell.offset(piece.offset).equals(worldPosition)) level.removeBlock(cell,false);
     }
     void tick() {
-        if(level==null)return;
-        if(level.isClientSide) {
-            if(burning && engine!=null && isMaster()) exhaust();
-            return;
-        }
+        if (level == null || level.isClientSide) return;
+        if (refreshPortsOnTick) refreshFluidPorts();
         boolean active=burn();
         if(burning!=active && !isRemoved()) {
             burning=active;
@@ -107,6 +127,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         }
     }
     private boolean burn() {
+        if (OrbitSpaces.unoccupied(level)) return false;
         if (!(level instanceof ServerLevel server) || engine == null) return false;
         if (server.getGameTime()%20 == 0) {
             if (!offset.equals(BlockPos.ZERO)) {
@@ -116,7 +137,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
             }
             if (cells.stream().anyMatch(p -> level.hasChunkAt(p) && !(level.getBlockEntity(p) instanceof EngineTile))) { dismantle(true); return false; }
         }
-        if (!offset.equals(BlockPos.ZERO) || cells.stream().noneMatch(level::hasNeighborSignal)) return false;
+        if (OrbitSpaces.unoccupied(level) || !offset.equals(BlockPos.ZERO) || cells.stream().noneMatch(level::hasNeighborSignal)) return false;
         int rate = Math.max(1,(int)Math.ceil(engine.getThrust() / (20.0 * 9.81 * Math.max(1,engine.getISP()))));
         if (tanks.length == 0) {
             if (!"SOLID".equals(engine.fuel()) || solid < rate) return false;
@@ -133,17 +154,6 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
                 Vec3.atLowerCornerOf(nozzle().getOpposite().getNormal()).scale(engine.getThrust()*PHYSICAL_THRUST_SCALE/20.0));
         }
         return true;
-    }
-    private void exhaust() {
-        var ship=Sable.HELPER.getContaining(level,worldPosition);
-        var axis=Vec3.atLowerCornerOf(nozzle().getNormal());
-        var exhaust=bounds().getCenter().add(axis.scale(engine.height()/2));
-        var point = ship==null ? exhaust : ship.logicalPose().transformPosition(exhaust);
-        var direction=ship==null ? axis : ship.logicalPose().transformPosition(exhaust.add(axis)).subtract(point).normalize();
-        var plume=new CompoundTag();
-        plume.putFloat("scale",(float)(6.5*Math.clamp(engine.bottomRadius(),0.4,2)));
-        plume.putDouble("moX",direction.x); plume.putDouble("moY",direction.y); plume.putDouble("moZ",direction.z);
-        com.hbm.particle.helper.HbmEffectNT.GasFlame.summonParticle(level,point.x,point.y,point.z,plume);
     }
     @Override protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
         super.saveAdditional(tag,provider);
