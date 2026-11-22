@@ -1,0 +1,61 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+if (providers.gradleProperty('flightWorld').isPresent()) layout.buildDirectory = file('build/flightTest')
+group = 'space.sableorbit'
+version = '0.1.7-alpha'
+base.archivesName = 'sable-orbits'
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+neoForge {
+    version = '21.1.265'
+    parchment {
+        mappingsVersion = '2024.11.17'
+        minecraftVersion = '1.21.1'
+    }
+    mods { sableorbits { sourceSet sourceSets.main } }
+}
+dependencies {
+    compileOnly files('.deps/drivebywire.jar','.deps/sable.jar','.deps/ntmspace.jar','.deps/hbm.jar','.deps/golemcore.jar',
+        '.deps/META-INF/jarjar/sable-companion-common-1.21.1-1.6.0.jar')
+}
+
+neoForge.runs {
+    gameTestServer { type = 'gameTestServer'; systemProperty 'neoforge.enabledGameTestNamespaces', 'sableorbits' }
+}
+
+repositories { mavenCentral() }
+neoForge.runs {
+    client { client(); gameDirectory = file('client-run') }
+}
+
+
+if (providers.gradleProperty('flightWorld').isPresent()) {
+    def world = providers.gradleProperty('flightWorld').get()
+    if (!(world ==~ /SableFlightTest-[A-Za-z0-9-]+/)) throw new GradleException("Use a dedicated SableFlightTest world")
+    sourceSets.main.java.srcDir('src/flightTest/java')
+    dependencies {
+        compileOnly files('.deps/create.jar')
+        compileOnly fileTree('.deps/META-INF/jarjar') { include 'ponder-*.jar', '*simulated.simulated*.jar', 'veil-*.jar' }
+    }
+    neoForge.runs.named('client') {
+        systemProperty 'sableorbits.testWorld', world
+        systemProperty 'sableorbits.inspect', providers.gradleProperty('inspectOrbit').isPresent().toString()
+        systemProperty 'sableorbits.skyOnly', providers.gradleProperty('skyOnly').isPresent().toString()
+        systemProperty 'sableorbits.powerOnly', providers.gradleProperty('powerOnly').isPresent().toString()
+        if (providers.gradleProperty('networkHost').isPresent()) systemProperty 'sableorbits.networkHost', 'true'
+        programArguments.addAll('--quickPlaySingleplayer', world)
+    }
+    if (providers.gradleProperty('networkHost').isPresent()) neoForge.runs {
+        peerClient {
+            client()
+            gameDirectory = file('build/peer-run')
+            systemProperty 'sableorbits.networkGuest', 'true'
+            programArguments.addAll('--username','OrbitPilot','--quickPlayMultiplayer','127.0.0.1:25471')
+        }
+    }
+    tasks.jar { exclude 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class' }
+}
+
+
+

@@ -1,0 +1,42 @@
+{
+  "type": "hbm:assembly_machine",
+  "name": "ass.rpstationcore20",
+  "input_items": [
+    {
+      "ingredient": "ntmspace:orbital_station_port"
+    },
+    {
+      "material": "aluminium",
+      "shape": "castplate",
+      "count": 4
+    },
+    {
+      "ingredient": "ntmspace:circuit_avionics"
+    },
+    {
+      "ingredient": "ntmspace:orbital_station_computer"
+    }
+  ],
+  "output_items": [
+    "ntmspace:rp_sc_20"
+  ],
+  "duration": 200,
+  "power": 100,
+  "order": 90132,
+  "input_items_expensive": [
+    {
+      "ingredient": "ntmspace:orbital_station_port"
+    },
+    {
+      "material": "aluminium",
+      "shape": "castplate",
+      "count": 4
+    },
+    {
+      "ingredient": "ntmspace:item_expensive_avionics"
+    },
+    {
+      "ingredient": "ntmspace:orbital_station_computer"
+    }
+  ]
+}

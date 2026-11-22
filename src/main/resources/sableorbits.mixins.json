@@ -1,0 +1,30 @@
+{
+  "required": true,
+  "package": "space.sableorbit.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["StaffLocksMixin", "OrbitCloudMixin", "OrbitHorizonMixin","BerthRenderMixin","DockPickMixin","DockDebugMixin"],
+  "mixins": [
+    "OrbitEntityMixin", "ServerAccess", "VoidTerrainMixin", "StationAddressMixin", "EvaFrictionMixin", "EvaPlayerMixin",
+    "TrackingMixin",
+    "OrbitMixin",
+    "StationMixin",
+    "ComputerMixin",
+    "PlotMixin",
+    "DockRouteMixin",
+    "DockDummyMixin","RocketMixin",
+    "PortMixin",
+    "OrbitPhysicsMixin",
+    "AssemblerMixin",
+    "LaunchPadMixin",
+    "RocketTargetMixin",
+    "EquipmentAccess"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+
+
+
+
+

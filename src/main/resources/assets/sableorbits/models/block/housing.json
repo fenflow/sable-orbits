@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "minecraft:block/polished_basalt_side",
+    "down": "minecraft:block/polished_basalt_side",
+    "up": "minecraft:block/polished_basalt_side",
+    "south": "minecraft:block/iron_block",
+    "north": "minecraft:block/smooth_basalt",
+    "east": "minecraft:block/polished_basalt_side",
+    "west": "minecraft:block/polished_basalt_side"
+  }
+}
