@@ -13,6 +13,7 @@ import net.minecraft.world.level.Level;
 abstract class RocketMixin {
     @org.spongepowered.asm.mixin.Shadow private com.ntmspace.rocket.ItemVOTVdrive.Destination destinationOverride;
     @org.spongepowered.asm.mixin.Unique private dev.golem.core.world.EntityInterpolation sableorbits$motion;
+    @org.spongepowered.asm.mixin.Unique private int sableorbits$missingDockTicks;
     protected dev.golem.core.world.EntityInterpolation interpolation() {
         if(sableorbits$motion==null) sableorbits$motion=new dev.golem.core.world.EntityInterpolation((EntityRideableRocket)(Object)this,3);
         return sableorbits$motion;
@@ -60,9 +61,19 @@ abstract class RocketMixin {
     @Inject(method="tick",at=@At("TAIL"))
     private void follow(CallbackInfo ci) { var r=(EntityRideableRocket)(Object)this;
         if(r.level().isClientSide) interpolation().interpolate();
-        else if(OrbitSpaces.isolated(r.level())) { boolean arriving=r.getState()==EntityRideableRocket.RocketState.DOCKING;
-            Docking.follow(r); Berth.tick(r);
-            if(arriving && r.getState()!=EntityRideableRocket.RocketState.DOCKING) destinationOverride=null; }
+        else if (OrbitSpaces.isolated(r.level())) {
+            boolean arriving = r.getState() == EntityRideableRocket.RocketState.DOCKING;
+            Docking.follow(r);
+            if (Berth.tick(r)) {
+                if (++sableorbits$missingDockTicks >= 60) Berth.abortApproach(r);
+            } else {
+                sableorbits$missingDockTicks = 0;
+            }
+            if (arriving && r.getState() != EntityRideableRocket.RocketState.DOCKING) {
+                destinationOverride = null;
+                sableorbits$missingDockTicks = 0;
+            }
+        }
         BerthBox.tick(r);
     }
     @Inject(method="attemptLaunch",at=@At("HEAD"),cancellable=true)
@@ -75,7 +86,7 @@ abstract class RocketMixin {
         var struct = rocket.getRocket();
         if (struct != null && struct.capsule != null && RocketParts.STATION_CORE.equals(struct.capsule.id())) return;
         var station = StationData.get(rocket.getServer()).getStationFromPosition(disk.x*1024,disk.z*1024);
-        if (station == null || station.getPort() == null || station.getPort().isRemoved()) {
+        if (Docking.receivingPort(station) == null) {
             if (rocket.getFirstPassenger() instanceof net.minecraft.server.level.ServerPlayer p)
                 p.displayClientMessage(net.minecraft.network.chat.Component.literal("The receiving station needs an available orbital dock."),false);
             ci.cancel();

@@ -181,6 +181,15 @@ public final class Attitude {
         });
     }
 
+    static Quaternionf savedOrientation(Player player) {
+        var orientation = player.getExistingDataOrNull(ORIENTATION);
+        return orientation == null ? null : new Quaternionf(orientation);
+    }
+
+    static void restoreOrientation(Player player, Quaternionf orientation) {
+        if (orientation != null) player.setData(ORIENTATION, orientation);
+    }
+
     static void reset(Player player) {
         if (player.hasData(INPUT)) player.removeData(INPUT);
         if (player.hasData(ORIENTATION)) player.removeData(ORIENTATION);

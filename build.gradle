@@ -58,7 +58,9 @@ if (providers.gradleProperty('flightWorld').isPresent()) {
             programArguments.addAll('--username','OrbitPilot','--quickPlayMultiplayer','127.0.0.1:25471')
         }
     }
-    tasks.jar { exclude 'space/sableorbit/AttitudeCheck*.class', 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/InertialCheck*.class', 'space/sableorbit/LaunchCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class', 'space/sableorbit/StationThrusterCheck*.class' }
+    tasks.named('jar') {
+        doFirst { throw new GradleException('Remove -PflightWorld to build the release JAR') }
+    }
 }
 
 

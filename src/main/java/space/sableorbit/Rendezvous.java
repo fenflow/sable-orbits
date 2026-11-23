@@ -48,8 +48,11 @@ final class Rendezvous {
         return true;
     }
     static AABB bounds(ServerSubLevel root) {
+        return bounds(Flight.group(root));
+    }
+    private static AABB bounds(List<ServerSubLevel> parts) {
         AABB box = null;
-        for (var part : Flight.group(root)) {
+        for (var part : parts) {
             var b = part.boundingBox();
             var next = new AABB(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ());
             box = box == null ? next : box.minmax(next);
@@ -57,27 +60,34 @@ final class Rendezvous {
         return box;
     }
     private static boolean join(ServerSubLevel guest, ServerSubLevel host, boolean publicVisit) {
-        var a = bounds(host);
-        var b = bounds(guest);
-        var obstacles = Stations.loaded(host.getLevel()).stream().filter(s -> Stations.root(s) == s && s != host).map(Rendezvous::bounds).toList();
-        var hostSections = HullDistance.sections(host);
-        var guestSections = HullDistance.sections(guest);
+        var hostParts = Flight.group(host);
+        var guestParts = Flight.group(guest);
+        var a = bounds(hostParts);
+        var b = bounds(guestParts);
+        if (a == null || b == null) return false;
+        var obstacles = Stations.loaded(host.getLevel()).stream().filter(s -> Stations.root(s) == s && s != host)
+            .map(Rendezvous::bounds).filter(Objects::nonNull).map(box -> box.inflate(1)).toList();
+        var hostHull = HullDistance.hull(hostParts);
+        var guestHull = HullDistance.hull(guestParts);
+        double width = (a.getXsize() + b.getXsize()) / 2, depth = (a.getZsize() + b.getZsize()) / 2;
+        var hostCenter = a.getCenter();
+        var guestCenter = b.getCenter();
         for (int i = 0; i < 72; i++) {
             double theta = 2 * Math.PI * i / 72;
             double x = Math.cos(theta), z = Math.sin(theta);
-            double width = (a.getXsize() + b.getXsize()) / 2, depth = (a.getZsize() + b.getZsize()) / 2;
             double low = 0, high = width + depth + 300;
             for (int j = 0; j < 40; j++) {
                 double r = (low + high) / 2;
                 if (Math.hypot(Math.max(0, Math.abs(x*r)-width), Math.max(0, Math.abs(z*r)-depth)) < 150) low = r;
                 else high = r;
             }
-            var offset = a.getCenter().add(x*high, 0, z*high).subtract(b.getCenter());
-            var gap = HullDistance.closest(hostSections,guestSections,offset,Double.POSITIVE_INFINITY);
+            var offset = hostCenter.add(x*high, 0, z*high).subtract(guestCenter);
+            var gap = HullDistance.closest(hostHull, guestHull, offset, Double.POSITIVE_INFINITY);
             if (gap == null) return false;
             var physicalOffset = offset.subtract(gap.normalize().scale(gap.length()-150));
-            if (obstacles.stream().anyMatch(box -> box.inflate(1).intersects(b.move(physicalOffset)))) continue;
-            var copies = Flight.transfer(Flight.group(guest), host.getLevel(), physicalOffset);
+            var movedBounds = b.move(physicalOffset);
+            if (obstacles.stream().anyMatch(box -> box.intersects(movedBounds))) continue;
+            var copies = Flight.transfer(guestParts, host.getLevel(), physicalOffset);
             if (copies.isEmpty()) return false;
             var hostVelocity = dev.ryanhcode.sable.api.physics.handle.RigidBodyHandle.of(host).getLinearVelocity(new org.joml.Vector3d());
             for (var copy : copies) {
@@ -134,18 +144,21 @@ final class Rendezvous {
         var container = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(guest.getLevel());
         if (!(container.getSubLevel(tag.getUUID("host")) instanceof ServerSubLevel host)) return;
         if(withinRange(host,guest)) return;
-        var a = bounds(host); var b = bounds(guest);
+        var hostParts = Flight.group(host);
+        var guestParts = Flight.group(guest);
+        var a = bounds(hostParts);
+        var b = bounds(guestParts);
+        if (a == null || b == null) return;
         double x = Math.max(0, Math.max(a.minX-b.maxX, b.minX-a.maxX));
         double y = Math.max(0, Math.max(a.minY-b.maxY, b.minY-a.maxY));
         double z = Math.max(0, Math.max(a.minZ-b.maxZ, b.minZ-a.maxZ));
-        if (x*x + y*y + z*z > 250*250 || HullDistance.closest(HullDistance.sections(host),HullDistance.sections(guest),Vec3.ZERO,250) == null)
+        if (x*x + y*y + z*z > 250*250 || HullDistance.closest(HullDistance.hull(hostParts), HullDistance.hull(guestParts), Vec3.ZERO, 250) == null)
             separate(guest, host);
     }
     private static boolean separate(ServerSubLevel guest, ServerSubLevel host) {
-        var home = OrbitSpaces.open(host.getLevel().getServer(), "station_" + guest.getUniqueId());
-        if (home==host.getLevel()) home=OrbitSpaces.open(host.getLevel().getServer(),"station_"+guest.getUniqueId()+"_solo");
         var p = guest.logicalPose().position();
-        var copies = Flight.transfer(Flight.group(guest), home, new Vec3(512-p.x, 128-p.y, 512-p.z));
+        var copies = OrbitSpaces.transfer(Flight.group(guest), OrbitSpaces.homeName(host.getLevel(), guest.getUniqueId()),
+            new Vec3(512-p.x, 128-p.y, 512-p.z));
         if (copies.isEmpty()) return false;
         var tag = Stations.info(copies.getFirst());
         for (String key : List.of("host","hostLeave","guestLeave","publicVisit")) tag.remove(key);

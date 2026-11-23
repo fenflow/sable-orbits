@@ -15,6 +15,7 @@ import org.joml.Vector3d;
 import java.util.*;
 
 final class Stations {
+    private static final Map<ServerSubLevel, Long> ascentRetry = new WeakHashMap<>();
     static final dev.ryanhcode.sable.api.sublevel.ticket.SubLevelLoadingTicketType<String> TICKET =
         dev.ryanhcode.sable.api.sublevel.ticket.SubLevelLoadingTicketType.create(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("sableorbits","station"),com.mojang.serialization.Codec.STRING);
     static void initialize() { /* Register the ticket codec before the first level loads. */ }
@@ -89,6 +90,7 @@ final class Stations {
                 if (part.logicalPose().position().y < 2000 || visited.contains(part)) continue;
                 var parts = Flight.group(part);
                 visited.addAll(parts);
+                if (parts.stream().anyMatch(member -> ascentRetry.getOrDefault(member, Long.MIN_VALUE) > level.getGameTime())) continue;
                 var crew = Flight.crew(parts);
                 if (crew.isEmpty()) {
                     for (var member : parts) {
@@ -122,11 +124,13 @@ final class Stations {
         var grid = returning && placeholder == null
             ? new int[]{old.getInt("x"),old.getInt("z")} : data.findFreeSpace();
         if (data.getStationFromPosition(grid[0]*1024,grid[1]*1024) != null) return;
-        var target = OrbitSpaces.open(origin.getServer(), "station_" + root.getUniqueId());
         var p = root.logicalPose().position();
         var offset = new Vec3(512 - p.x, 128 - p.y, 512 - p.z);
-        var moved = Flight.transfer(parts, target, offset);
-        if (moved.isEmpty()) return;
+        var moved = OrbitSpaces.transfer(parts, "station_" + root.getUniqueId(), offset);
+        if (moved.isEmpty()) {
+            ascentRetry.put(root, origin.getGameTime() + 20);
+            return;
+        }
         var station = data.addStation(grid[0], grid[1], Orbit.bodyOf(origin));
         station.hasStation = true;
         station.name = root.getName() == null || root.getName().isBlank() ? "Station " + grid[0] + ", " + grid[1] : root.getName();

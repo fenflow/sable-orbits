@@ -115,13 +115,13 @@ final class Fuselages {
         var sections = new ArrayList<FuselageTile>(cells.size());
         for (var cell : cells) {
             var snapshot = BlockSnapshot.create(level.dimension(), level, cell, stagingFlags);
-            if (!level.setBlock(cell, state, stagingFlags)) {
-                restore(replaced);
+            if (!level.setBlock(cell, state.setValue(FuselageBlock.MASTER, cell.equals(origin)), stagingFlags)) {
+                RocketPlacement.restore(replaced);
                 return false;
             }
             replaced.add(snapshot);
             if (!(level.getBlockEntity(cell) instanceof FuselageTile section)) {
-                restore(replaced);
+                RocketPlacement.restore(replaced);
                 return false;
             }
             section.initialize(part, origin.subtract(cell));
@@ -130,7 +130,7 @@ final class Fuselages {
 
         if (EventHooks.onMultiBlockPlace(player, replaced, facing)
                 || sections.stream().anyMatch(section -> level.getBlockEntity(section.getBlockPos()) != section)) {
-            restore(replaced);
+            RocketPlacement.restore(replaced);
             return false;
         }
 
@@ -139,14 +139,11 @@ final class Fuselages {
         if (contents != null) master.loadTankContents(contents.copyTag().getCompound(ITEM_TANKS));
         for (int index = 0; index < cells.size(); index++) {
             BlockPos cell = cells.get(index);
-            level.markAndNotifyBlock(cell, level.getChunkAt(cell), replaced.get(index).getState(), state, Block.UPDATE_ALL, Block.UPDATE_LIMIT);
-            sections.get(index).refreshFluidPorts();
+            var section = sections.get(index);
+            level.markAndNotifyBlock(cell, level.getChunkAt(cell), replaced.get(index).getState(), section.getBlockState(), Block.UPDATE_ALL, Block.UPDATE_LIMIT);
+            section.refreshFluidPorts();
         }
         return true;
-    }
-
-    private static void restore(List<BlockSnapshot> snapshots) {
-        for (var snapshot : snapshots.reversed()) snapshot.restore(Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
     }
 
     static void checkFootprint(FuselageTile section) {

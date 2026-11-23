@@ -103,6 +103,10 @@ public final class Spacewalk {
 
     public static void forget(ServerPlayer player) { frames.remove(player); }
 
+    static void restore(ServerPlayer player, Reference reference) {
+        if (reference != null) frames.put(player, reference);
+    }
+
     public static boolean rotationOnly(Set<RelativeMovement> relative, double dx, double dy, double dz) {
         return dx == 0 && dy == 0 && dz == 0 && relative.contains(RelativeMovement.X)
             && relative.contains(RelativeMovement.Y) && relative.contains(RelativeMovement.Z);

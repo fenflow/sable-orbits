@@ -1,9 +1,10 @@
 package space.sableorbit;
 
 import dev.ryanhcode.sable.Sable;
-import dev.ryanhcode.sable.api.SubLevelHelper;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.math.BoundingBox3d;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
+import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason;
 import dev.ryanhcode.sable.sublevel.storage.serialization.SubLevelSerializer;
 import dev.ryanhcode.sable.util.SableNBTUtils;
@@ -13,11 +14,37 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 import java.util.*;
+import java.util.function.Consumer;
 
 final class Flight {
     private record Arrival(UUID part, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
                            Vec3 feet, int expires) {}
     private static final Map<ServerPlayer,Arrival> arrivals = new WeakHashMap<>();
+
+    private record PlayerPosition(Vec3 position, Vec3 velocity, float yaw, float pitch, float fallDistance,
+                                  SubLevel trackingDeck, Spacewalk.Reference spacewalk, org.joml.Quaternionf orientation) {
+        static PlayerPosition of(ServerPlayer player) {
+            return new PlayerPosition(player.position(), player.getDeltaMovement(), player.getYRot(),
+                player.getXRot(), player.fallDistance, Sable.HELPER.getTrackingSubLevel(player),
+                Spacewalk.reference(player), Attitude.savedOrientation(player));
+        }
+
+        void restore(ServerPlayer player, ServerLevel origin) {
+            if (player.level() != origin) {
+                FlightRollback.returnPlayer(player, origin, position, yaw, pitch);
+                if (player.level() != origin || origin.getEntity(player.getUUID()) != player)
+                    throw new IllegalStateException("Could not return station passenger " + player.getUUID());
+            } else {
+                player.connection.teleport(position.x, position.y, position.z, yaw, pitch);
+            }
+            player.setDeltaMovement(velocity);
+            player.fallDistance = fallDistance;
+            ((dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension) player)
+                .sable$setTrackingSubLevel(trackingDeck);
+            Spacewalk.restore(player, spacewalk);
+            Attitude.restoreOrientation(player, orientation);
+        }
+    }
 
     // A standing rider can start falling before the client has built the new collision mesh.
     // Preserve the local contact point during this short handover. Walking off the deck releases it.
@@ -50,28 +77,39 @@ final class Flight {
     private static final boolean WIRES = net.neoforged.fml.ModList.get().isLoaded("drivebywire");
     static List<ServerSubLevel> group(ServerSubLevel root) { return group(root,false); }
     static List<ServerSubLevel> group(ServerSubLevel root,boolean crossStationLinks) {
-        var result = new LinkedHashSet<ServerSubLevel>();
+        var level = root.getLevel();
+        var result = new ArrayList<ServerSubLevel>();
         var pending = new ArrayDeque<ServerSubLevel>();
+        var seen = new HashSet<ServerSubLevel>();
         var info = Stations.info(root);
-        var wires = WIRES ? ShipWires.links(root.getLevel()) : java.util.List.<ShipWires.Link>of();
+        var station = !crossStationLinks && info.hasUUID("root") ? info.getUUID("root") : null;
+        Map<ServerSubLevel,Set<ServerSubLevel>> wires = WIRES ? ShipWires.adjacency(level) : Map.of();
+        Consumer<SubLevel> enqueue = neighbor -> {
+            if (neighbor instanceof ServerSubLevel part && part.getLevel() == level && !part.isRemoved() && seen.add(part)) {
+                pending.addLast(part);
+            }
+        };
         pending.add(root);
+        seen.add(root);
         while (!pending.isEmpty()) {
             var part = pending.removeFirst();
-            if (result.contains(part)) continue;
-            var candidate = Stations.info(part);
-            if (!crossStationLinks && info.hasUUID("root") && candidate.hasUUID("root")
-                    && !info.getUUID("root").equals(candidate.getUUID("root"))) continue;
+            if (station != null) {
+                var candidate = Stations.info(part);
+                if (candidate.hasUUID("root") && !station.equals(candidate.getUUID("root"))) continue;
+            }
             result.add(part);
-            if (WIRES) ShipWires.neighbors(part,pending,wires);
-            for (var dependency : SubLevelHelper.getLoadingDependencyChain(part))
-                if (!result.contains(dependency)) pending.addLast(dependency);
+            wires.getOrDefault(part, Set.of()).forEach(enqueue);
+            // Sable's loading chain follows intersections and actor loading dependencies.
+            // Visit those edges here so a different station root also stops traversal.
+            Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(part.boundingBox())).forEach(enqueue);
+            for (var actor : part.getPlot().getBlockEntityActors()) {
+                var dependencies = actor.sable$getLoadingDependencies();
+                if (dependencies != null) dependencies.forEach(enqueue);
+            }
             for (var holder : part.getPlot().getLoadedChunks())
                 for (var tile : holder.getChunk().getBlockEntities().values())
                     if (tile instanceof com.hbm.tileentity.network.TileEntityPylonBase pylon)
-                        for (var peer : pylon.getConnected()) {
-                            if (Sable.HELPER.getContaining(part.getLevel(),peer) instanceof ServerSubLevel other
-                                    && !result.contains(other)) pending.addLast(other);
-                        }
+                        for (var peer : pylon.getConnected()) enqueue.accept(Sable.HELPER.getContaining(level, peer));
         }
         return List.copyOf(result);
     }
@@ -85,10 +123,15 @@ final class Flight {
 
     // Keep the original plot addresses. Block entities and joints can store absolute plot positions.
     static List<ServerSubLevel> transfer(List<ServerSubLevel> parts, ServerLevel target, Vec3 offset) {
+        return transfer(parts, target, offset, List.of());
+    }
+
+    static List<ServerSubLevel> transfer(List<ServerSubLevel> parts, ServerLevel target, Vec3 offset,
+                                        Collection<ServerPlayer> standingBeforeAssembly) {
         var origin = parts.getFirst().getLevel();
         var destination = SubLevelContainer.getContainer(target);
         var source = SubLevelContainer.getContainer(origin);
-        if (destination == null || source == null || !destination.getOrigin().equals(source.getOrigin())
+        if (target == origin || destination == null || source == null || !destination.getOrigin().equals(source.getOrigin())
                 || destination.getLogPlotSize() != source.getLogPlotSize()) return List.of();
         for (var part : parts) {
             var plot = part.getPlot().plotPos;
@@ -102,6 +145,7 @@ final class Flight {
         for (var entity : origin.getAllEntities()) {
             if (members.contains(Sable.HELPER.getContaining(entity))
                     || members.contains(Sable.HELPER.getTrackingOrVehicleSubLevel(entity))
+                    || standingBeforeAssembly.contains(entity)
                     || (entity instanceof ServerPlayer p && p.containerMenu instanceof Console menu && menu.controls(members))
                     || (entity instanceof ServerPlayer p && onDeck(p,parts,OrbitSpaces.isolated(origin) ? 2.1 : 0.12))
                     || (entity.getPersistentData().hasUUID("sableorbits_berth") && parts.stream().anyMatch(p -> p.getUniqueId().equals(entity.getPersistentData().getUUID("sableorbits_berth"))))) {
@@ -110,9 +154,10 @@ final class Flight {
                 root.getIndirectPassengers().forEach(originals::add);
             }
         }
-        var vehicles = new HashMap<Entity,Entity>();
+        var vehicles = new LinkedHashMap<Entity,Entity>();
         var positions = new HashMap<Entity,Vec3>();
         var replacements = new LinkedHashMap<Entity,Entity>();
+        var players = new LinkedHashMap<ServerPlayer,PlayerPosition>();
         for (var entity : originals) {
             if (target.getEntity(entity.getUUID()) != null) return List.of();
             vehicles.put(entity, entity.getVehicle());
@@ -120,7 +165,10 @@ final class Flight {
             var pos = local && !(entity instanceof ServerPlayer) ? entity.position()
                 : Sable.HELPER.projectOutOfSubLevel(origin, entity.position()).add(offset);
             positions.put(entity, pos);
-            if (entity instanceof ServerPlayer) continue;
+            if (entity instanceof ServerPlayer player) {
+                players.put(player, PlayerPosition.of(player));
+                continue;
+            }
             var copy = entity.getType().create(target);
             if (copy == null) return List.of();
             var tag = entity.saveWithoutId(new CompoundTag());
@@ -133,6 +181,19 @@ final class Flight {
         var loaded = new ArrayList<ServerSubLevel>();
         var indexed = new ArrayList<ServerSubLevel>();
         var inserted = new ArrayList<Entity>();
+        var attemptedPlayers = new ArrayList<ServerPlayer>();
+        var destinationRiders = new LinkedHashMap<Entity,Entity>();
+        var contacts = new HashMap<ServerPlayer,Arrival>();
+        for (var player : players.keySet()) {
+            if (player.isPassenger()) continue;
+            for (var part : parts) {
+                if (!onDeck(player,List.of(part),0.3)) continue;
+                contacts.put(player,new Arrival(part.getUniqueId(),target.dimension(),
+                    part.logicalPose().transformPositionInverse(player.position()),player.tickCount+100));
+                break;
+            }
+        }
+        var stagedWires = new ArrayList<ShipWires.Link>();
         try {
             var ids = parts.stream().map(ServerSubLevel::getUniqueId).toList();
             for (var part : parts) {
@@ -162,13 +223,42 @@ final class Flight {
                 indexed.add(copy);
                 StationMachines.restore(copy);
             }
-            if (WIRES) ShipWires.write(target,wireLinks);
+            if (WIRES) ShipWires.write(target, wireLinks, stagedWires);
             for (var entity : replacements.values()) {
                 if (!target.addFreshEntity(entity)) throw new IllegalStateException("Entity transfer rejected");
                 inserted.add(entity);
             }
+            for (var entry : players.entrySet()) {
+                var player = entry.getKey();
+                var previous = entry.getValue();
+                var pos = positions.get(player);
+                attemptedPlayers.add(player);
+                player.stopRiding();
+                if (player.isPassenger()) throw new IllegalStateException("Station passenger dismount rejected");
+                player.teleportTo(target, pos.x, pos.y, pos.z, previous.yaw(), previous.pitch());
+                if (player.level() != target || target.getEntity(player.getUUID()) != player)
+                    throw new IllegalStateException("Station passenger dimension change rejected");
+                replacements.put(player, player);
+            }
+            for (var entry : vehicles.entrySet()) {
+                if (entry.getValue() == null) continue;
+                var rider = replacements.get(entry.getKey());
+                var mount = replacements.get(entry.getValue());
+                destinationRiders.put(rider, mount);
+                if (!rider.startRiding(mount, true) || rider.getVehicle() != mount)
+                    throw new IllegalStateException("Station passenger remount rejected");
+            }
         } catch (RuntimeException ex) {
-            if (WIRES) ShipWires.clear(target,wireLinks);
+            for (var entry : destinationRiders.entrySet()) {
+                if (entry.getKey().getVehicle() == entry.getValue())
+                    FlightRollback.restoreRiding(entry.getKey(), entry.getValue(), false);
+            }
+            for (var player : attemptedPlayers.reversed()) players.get(player).restore(player, origin);
+            for (var entry : vehicles.entrySet()) {
+                if (entry.getValue() != null && entry.getKey().getVehicle() != entry.getValue())
+                    FlightRollback.restoreRiding(entry.getKey(), entry.getValue(), true);
+            }
+            if (WIRES) ShipWires.clear(target, stagedWires);
             inserted.forEach(Entity::discard);
             indexed.forEach(StationMachines::depart);
             for (var part : parts) {
@@ -178,31 +268,14 @@ final class Flight {
             Sable.LOGGER.error("Station transfer could not stage its destination", ex);
             return List.of();
         }
-        var contacts = new HashMap<ServerPlayer,Arrival>();
-        for (var entity : originals) {
-            if (!(entity instanceof ServerPlayer player) || player.isPassenger()) continue;
-            for (var part : parts) {
-                if (!onDeck(player,List.of(part),0.3)) continue;
-                contacts.put(player,new Arrival(part.getUniqueId(),target.dimension(),
-                    part.logicalPose().transformPositionInverse(player.position()),player.tickCount+100));
-                break;
-            }
-        }
-        originals.forEach(Entity::stopRiding);
         for (var entity : originals) {
             if (entity instanceof ServerPlayer player) {
-                var pos = positions.get(player);
-                player.teleportTo(target, pos.x, pos.y, pos.z, player.getYRot(), player.getXRot());
                 player.fallDistance = 0;
                 player.setDeltaMovement(Vec3.ZERO);
                 arrivals.remove(player);
                 if (contacts.containsKey(player)) arrivals.put(player,contacts.get(player));
-                replacements.put(player, player);
             } else entity.discard();
         }
-        vehicles.forEach((rider, mount) -> {
-            if (mount != null) replacements.get(rider).startRiding(replacements.get(mount), true);
-        });
         if (WIRES) ShipWires.clear(origin,wireLinks);
         for (var part : parts) {
             StationMachines.depart(part);

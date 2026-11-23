@@ -5,12 +5,15 @@ import com.ntmspace.rocket.*;
 import net.minecraft.core.*;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.*;
 import net.minecraft.world.level.block.state.*;
 import net.minecraft.world.level.block.state.properties.*;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.capabilities.*;
+import net.neoforged.neoforge.common.util.BlockSnapshot;
+import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.event.entity.player.UseItemOnBlockEvent;
 import net.minecraft.world.ItemInteractionResult;
 import net.neoforged.neoforge.registries.*;
@@ -79,26 +82,55 @@ final class Engines {
         var player = e.getPlayer();
         var level = e.getLevel();
         var placement = RocketPlacement.of(part, e.getUseOnContext());
-        var nozzle = placement.facing();
-        var first = placement.origin();
-        var cells = placement.cells();
         e.cancelWithResult(ItemInteractionResult.FAIL);
         if (!placement.placeable()) return;
-        if (level instanceof ServerLevel) {
-            var state = BLOCK.get().defaultBlockState().setValue(EngineBlock.FACING,nozzle);
-            for (var cell : cells) {
-                var skin = cell.equals(first) ? 0 : (cell.relative(nozzle).equals(first) || !cells.contains(cell.relative(nozzle)) ? 2 : 1);
-                level.setBlock(cell,state.setValue(EngineBlock.SKIN,skin),3);
-                var tile = (EngineTile)level.getBlockEntity(cell);
-                tile.initialize(part,first.subtract(cell));
-                level.sendBlockUpdated(cell,tile.getBlockState(),tile.getBlockState(),Block.UPDATE_CLIENTS);
-            }
-            ((EngineTile)level.getBlockEntity(first)).refreshPorts();
-            level.updateNeighborsAt(first,BLOCK.get());
-            level.getBlockState(first).updateNeighbourShapes(level,first,Block.UPDATE_ALL);
+        if (level instanceof ServerLevel server) {
+            if (!place(server, player, part, placement, e.getFace())) return;
             item.consume(1,player);
         }
         e.setCancellationResult(ItemInteractionResult.sidedSuccess(level.isClientSide));
+    }
+
+    private static boolean place(ServerLevel level, Player player, RocketPart part, RocketPlacement placement, Direction face) {
+        var nozzle = placement.facing();
+        var origin = placement.origin();
+        var cells = new ArrayList<>(placement.cells());
+        // The first snapshot identifies the cell placed against the clicked face.
+        Collections.swap(cells, 0, cells.indexOf(placement.contact()));
+        var footprint = Set.copyOf(cells);
+        var state = BLOCK.get().defaultBlockState().setValue(EngineBlock.FACING, nozzle);
+        var snapshots = new ArrayList<BlockSnapshot>(cells.size());
+        var sections = new ArrayList<EngineTile>(cells.size());
+        int stagingFlags = Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_INVISIBLE;
+        for (var cell : cells) {
+            var next = cell.relative(nozzle);
+            int skin = cell.equals(origin) ? 0 : next.equals(origin) || !footprint.contains(next) ? 2 : 1;
+            var snapshot = BlockSnapshot.create(level.dimension(), level, cell, stagingFlags);
+            if (!level.setBlock(cell, state.setValue(EngineBlock.SKIN, skin), stagingFlags)) {
+                RocketPlacement.restore(snapshots);
+                return false;
+            }
+            snapshots.add(snapshot);
+            if (!(level.getBlockEntity(cell) instanceof EngineTile section)) {
+                RocketPlacement.restore(snapshots);
+                return false;
+            }
+            section.initialize(part, origin.subtract(cell));
+            sections.add(section);
+        }
+        boolean canceled = snapshots.size() == 1 ? EventHooks.onBlockPlace(player, snapshots.getFirst(), face)
+            : EventHooks.onMultiBlockPlace(player, snapshots, face);
+        if (canceled || sections.stream().anyMatch(section -> level.getBlockEntity(section.getBlockPos()) != section)) {
+            RocketPlacement.restore(snapshots);
+            return false;
+        }
+        for (int index = 0; index < cells.size(); index++) {
+            var cell = cells.get(index);
+            level.markAndNotifyBlock(cell, level.getChunkAt(cell), snapshots.get(index).getState(),
+                sections.get(index).getBlockState(), Block.UPDATE_ALL, Block.UPDATE_LIMIT);
+        }
+        if (level.getBlockEntity(origin) instanceof EngineTile master) master.refreshPorts();
+        return true;
     }
 }
 

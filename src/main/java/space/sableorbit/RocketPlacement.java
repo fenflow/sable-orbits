@@ -7,10 +7,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.block.Block;
+import net.neoforged.neoforge.common.util.BlockSnapshot;
 import org.joml.Vector3d;
 import java.util.List;
 
-record RocketPlacement(BlockPos origin, Direction facing, List<BlockPos> cells, boolean placeable) {
+record RocketPlacement(BlockPos origin, BlockPos contact, Direction facing, List<BlockPos> cells, boolean placeable) {
     static RocketPlacement of(RocketPart part, UseOnContext use) {
         var context = new BlockPlaceContext(use);
         var player = use.getPlayer();
@@ -18,7 +20,8 @@ record RocketPlacement(BlockPos origin, Direction facing, List<BlockPos> cells, 
         var plot = Sable.HELPER.getContaining(level, use.getClickedPos());
         Direction face = use.getClickedFace();
         Direction facing = face;
-        BlockPos origin = context.getClickedPos();
+        BlockPos contact = context.getClickedPos();
+        BlockPos origin = contact;
         if (part.type() == PartType.THRUSTER) {
             var view = player.getLookAngle();
             var local = new Vector3d(view.x, view.y, view.z);
@@ -31,6 +34,10 @@ record RocketPlacement(BlockPos origin, Direction facing, List<BlockPos> cells, 
         boolean valid = cells.stream().allMatch(pos -> level.isInWorldBounds(pos) && level.getWorldBorder().isWithinBounds(pos)
             && Sable.HELPER.getContaining(level, pos) == plot && level.getBlockState(pos).canBeReplaced(context)
             && player.mayUseItemAt(pos, face, use.getItemInHand()) && level.mayInteract(player, pos));
-        return new RocketPlacement(origin, facing, cells, valid);
+        return new RocketPlacement(origin, contact, facing, cells, valid);
+    }
+
+    static void restore(List<BlockSnapshot> snapshots) {
+        for (var snapshot : snapshots.reversed()) snapshot.restore(Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
     }
 }

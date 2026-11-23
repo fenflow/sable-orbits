@@ -1,71 +1,181 @@
 package space.sableorbit;
 
 import dev.ryanhcode.sable.companion.math.BoundingBox3d;
+import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-import net.minecraft.world.phys.*;
-import java.util.*;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
 
 // Search occupied sections in order of their closest possible approach. Empty voxels
 // never participate, including the empty space between two wired sublevels.
 final class HullDistance {
-    record Node(ServerSubLevel part, LevelChunkSection section, int x,int y,int z,int size,AABB box) {
-        static Node of(ServerSubLevel part,LevelChunkSection section,int x,int y,int z,int size) {
-            var bounds = new BoundingBox3d(x,y,z,x+size,y+size,z+size).transform(part.logicalPose());
-            return new Node(part,section,x,y,z,size,new AABB(bounds.minX(),bounds.minY(),bounds.minZ(),bounds.maxX(),bounds.maxY(),bounds.maxZ()));
+    private interface Region {
+        AABB box();
+        int size();
+        List<? extends Region> children();
+    }
+
+    private record SectionBranch(AABB box, int size, List<Region> children) implements Region {}
+
+    static final class Node implements Region {
+        private final ServerSubLevel part;
+        private final LevelChunkSection section;
+        private final Pose3d pose;
+        private final int x, y, z, size;
+        private final AABB box;
+        private final boolean full;
+        private List<Node> children;
+
+        private Node(ServerSubLevel part, LevelChunkSection section, Pose3d pose, int x, int y, int z, int size, boolean full) {
+            this.part = part;
+            this.section = section;
+            this.pose = pose;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.size = size;
+            this.full = full;
+            var bounds = new BoundingBox3d(x, y, z, x + size, y + size, z + size).transform(pose);
+            box = new AABB(bounds.minX(), bounds.minY(), bounds.minZ(), bounds.maxX(), bounds.maxY(), bounds.maxZ());
         }
-        boolean empty() { return size == 1 && section.getBlockState(x&15,y&15,z&15).isAir(); }
-        List<Node> children() {
-            int n = size/2;
-            var result = new ArrayList<Node>(8);
-            for (int dx=0;dx<size;dx+=n) for (int dy=0;dy<size;dy+=n) for (int dz=0;dz<size;dz+=n) {
-                var cell = of(part,section,x+dx,y+dy,z+dz,n);
-                if (!cell.empty()) result.add(cell);
+        ServerSubLevel part() { return part; }
+        LevelChunkSection section() { return section; }
+        int x() { return x; }
+        int y() { return y; }
+        int z() { return z; }
+        @Override public AABB box() { return box; }
+        @Override public int size() { return size; }
+
+        @Override public List<Node> children() {
+            if (children != null) return children;
+            if (size == 1) return List.of();
+            int half = size / 2;
+            children = new ArrayList<>(8);
+            for (int dx = 0; dx < size; dx += half) {
+                for (int dy = 0; dy < size; dy += half) {
+                    for (int dz = 0; dz < size; dz += half) {
+                        int childX = x + dx, childY = y + dy, childZ = z + dz;
+                        if (full || occupied(childX & 15, childY & 15, childZ & 15, half)) {
+                            children.add(new Node(part, section, pose, childX, childY, childZ, half, full));
+                        }
+                    }
+                }
             }
-            return result;
+            return children;
+        }
+
+        private boolean occupied(int minX, int minY, int minZ, int width) {
+            for (int y = minY; y < minY + width; y++) {
+                for (int z = minZ; z < minZ + width; z++) {
+                    for (int x = minX; x < minX + width; x++) {
+                        if (!section.getBlockState(x, y, z).isAir()) return true;
+                    }
+                }
+            }
+            return false;
         }
     }
+
     static List<Node> sections(ServerSubLevel station) {
+        return sections(Flight.group(station));
+    }
+
+    private static List<Node> sections(List<ServerSubLevel> parts) {
         var result = new ArrayList<Node>();
-        for (var part : Flight.group(station)) for (var holder : part.getPlot().getLoadedChunks()) {
-            var chunk = holder.getChunk();
-            for (int i=0;i<chunk.getSectionsCount();i++) {
-                var section = chunk.getSection(i);
-                if (!section.hasOnlyAir()) result.add(Node.of(part,section,chunk.getPos().getMinBlockX(),
-                    chunk.getSectionYFromSectionIndex(i)*16,chunk.getPos().getMinBlockZ(),16));
+        for (var part : parts) {
+            var pose = new Pose3d(part.logicalPose());
+            for (var holder : part.getPlot().getLoadedChunks()) {
+                var chunk = holder.getChunk();
+                for (int i = 0; i < chunk.getSectionsCount(); i++) {
+                    var section = chunk.getSection(i);
+                    if (!section.hasOnlyAir()) {
+                        result.add(new Node(part, section, pose, chunk.getPos().getMinBlockX(),
+                            chunk.getSectionYFromSectionIndex(i) * 16, chunk.getPos().getMinBlockZ(), 16,
+                            !section.maybeHas(BlockState::isAir)));
+                    }
+                }
             }
         }
         return result;
     }
-    record Pair(Node a,Node b,Vec3 gap) {
-        static Pair of(Node a,Node b,Vec3 offset) {
-            var x = a.box; var y = b.box.move(offset);
-            return new Pair(a,b,new Vec3(delta(x.minX,x.maxX,y.minX,y.maxX),
-                delta(x.minY,x.maxY,y.minY,y.maxY),delta(x.minZ,x.maxZ,y.minZ,y.maxZ)));
-        }
-        static double delta(double a0,double a1,double b0,double b1) {
-            return b0 > a1 ? b0-a1 : b1 < a0 ? b1-a0 : 0;
+
+    // A search snapshot is used within one server operation, while poses and blocks are stable.
+    static final class Hull {
+        private final Region root;
+
+        private Hull(List<Node> sections) {
+            var ordered = new ArrayList<>(sections);
+            root = ordered.isEmpty() ? null : combine(ordered);
         }
     }
+
+    static Hull hull(List<ServerSubLevel> parts) {
+        return new Hull(sections(parts));
+    }
+
+    private static Region combine(List<Node> sections) {
+        var first = sections.getFirst();
+        if (sections.size() == 1) return first;
+        AABB bounds = first.box();
+        for (int index = 1; index < sections.size(); index++) bounds = bounds.minmax(sections.get(index).box());
+        double width = bounds.getXsize(), height = bounds.getYsize(), depth = bounds.getZsize();
+        if (width >= height && width >= depth) sections.sort(Comparator.comparingDouble(node -> node.box.minX + node.box.maxX));
+        else if (height >= depth) sections.sort(Comparator.comparingDouble(node -> node.box.minY + node.box.maxY));
+        else sections.sort(Comparator.comparingDouble(node -> node.box.minZ + node.box.maxZ));
+        int middle = sections.size() / 2;
+        var left = combine(sections.subList(0, middle));
+        var right = combine(sections.subList(middle, sections.size()));
+        return new SectionBranch(bounds, left.size() + right.size(), List.of(left, right));
+    }
+
+    private record Pair(Region host, Region guest, double x, double y, double z, double distanceSquared) {}
+
+    private static final Comparator<Pair> NEAREST_FIRST = Comparator.comparingDouble(Pair::distanceSquared)
+        .thenComparingInt(pair -> pair.host().size() + pair.guest().size());
+
+    static Vec3 closest(List<Node> host, List<Node> guest, Vec3 offset, double radius) {
+        return closest(new Hull(host), new Hull(guest), offset, radius);
+    }
+
     // The returned vector is directed from host to guest. A null result means the
     // closest occupied blocks are beyond the supplied search radius.
-    static Vec3 closest(List<Node> host,List<Node> guest,Vec3 offset,double radius) {
-        var queue = new PriorityQueue<Pair>(Comparator.<Pair>comparingDouble(p -> p.gap.lengthSqr()).thenComparingInt(p -> p.a.size+p.b.size));
-        double limit = radius*radius;
-        for (var a : host) for (var b : guest) {
-            var pair = Pair.of(a,b,offset);
-            if (pair.gap.lengthSqr() <= limit) queue.add(pair);
-        }
+    static Vec3 closest(Hull host, Hull guest, Vec3 offset, double radius) {
+        if (host.root == null || guest.root == null) return null;
+        var queue = new PriorityQueue<>(NEAREST_FIRST);
+        double limit = radius * radius;
+        enqueue(queue, host.root, guest.root, offset, limit);
         while (!queue.isEmpty()) {
-            var p = queue.remove();
-            if (p.a.size == 1 && p.b.size == 1) return p.gap;
-            boolean splitA = p.a.size >= p.b.size;
-            for (var child : (splitA?p.a:p.b).children()) {
-                var next = splitA ? Pair.of(child,p.b,offset) : Pair.of(p.a,child,offset);
-                if (next.gap.lengthSqr() <= limit) queue.add(next);
+            var pair = queue.remove();
+            var a = pair.host();
+            var b = pair.guest();
+            if (a.size() == 1 && b.size() == 1) return new Vec3(pair.x(), pair.y(), pair.z());
+            if (a.size() >= b.size()) {
+                for (var child : a.children()) enqueue(queue, child, b, offset, limit);
+            } else {
+                for (var child : b.children()) enqueue(queue, a, child, offset, limit);
             }
         }
         return null;
+    }
+
+    private static void enqueue(PriorityQueue<Pair> queue, Region host, Region guest, Vec3 offset, double limit) {
+        var a = host.box();
+        var b = guest.box();
+        double x = delta(a.minX, a.maxX, b.minX + offset.x, b.maxX + offset.x);
+        double y = delta(a.minY, a.maxY, b.minY + offset.y, b.maxY + offset.y);
+        double z = delta(a.minZ, a.maxZ, b.minZ + offset.z, b.maxZ + offset.z);
+        double distanceSquared = x * x + y * y + z * z;
+        if (distanceSquared <= limit) queue.add(new Pair(host, guest, x, y, z, distanceSquared));
+    }
+
+    private static double delta(double aMin, double aMax, double bMin, double bMax) {
+        return bMin > aMax ? bMin - aMax : bMax < aMin ? bMax - aMin : 0;
     }
 }
 

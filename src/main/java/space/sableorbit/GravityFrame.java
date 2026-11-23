@@ -9,7 +9,6 @@ import com.ntmspace.tileentity.TileEntityAirPump;
 import com.ntmspace.world.SpaceEnvironment;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.companion.math.BoundingBox3d;
 import dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
@@ -60,6 +59,10 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
             buf -> new Surface(buf.readUUID(), buf.readEnum(Direction.class), buf.readFloat()))).build());
     private static final Supplier<AttachmentType<Vents>> VENTS = TYPES.register("vent_rooms", () ->
         AttachmentType.builder(Vents::new).build());
+
+    public interface RoomBounds {
+        boolean sableorbits$intersectsRoomBounds(BlockPos min, BlockPos max);
+    }
 
     static void register(IEventBus bus) {
         TYPES.register(bus);
@@ -132,22 +135,30 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
     private static final class Vents {
         long tick = Long.MIN_VALUE;
         final Map<SubLevel, List<AtmosphereBlob>> byDeck = new HashMap<>();
+        final List<SubLevel> orderedDecks = new ArrayList<>();
 
-        void refresh(ServerLevel level) {
+        void refresh(ServerLevel level, SubLevelContainer plots) {
             if (tick == level.getGameTime()) return;
             tick = level.getGameTime();
-            byDeck.clear();
+            byDeck.values().forEach(List::clear);
             for (var blob : AtmosphereHandler.blobsOf(level)) {
                 if (!(blob.provider() instanceof TileEntityAirPump vent) || vent.isRemoved() || !blob.hasFluid(Fluids.OXYGEN)) continue;
                 var deck = Sable.HELPER.getContaining(vent);
                 if (deck != null) byDeck.computeIfAbsent(deck, unused -> new ArrayList<>()).add(blob);
+            }
+            byDeck.values().removeIf(List::isEmpty);
+            orderedDecks.clear();
+            if (byDeck.size() == 1) orderedDecks.add(byDeck.keySet().iterator().next());
+            else if (!byDeck.isEmpty()) {
+                // Match Sable's order for a resident inside overlapping plots.
+                for (var deck : plots.getAllSubLevels()) if (byDeck.containsKey(deck)) orderedDecks.add(deck);
             }
         }
     }
 
     private static Surface oxygenRoom(Entity entity, ServerLevel level, SubLevelContainer plots, Surface previous) {
         var vents = level.getData(VENTS);
-        vents.refresh(level);
+        vents.refresh(level, plots);
         if (vents.byDeck.isEmpty()) return null;
         var tracking = Sable.HELPER.getTrackingOrVehicleSubLevel(entity);
         var feet = entity.position();
@@ -158,9 +169,11 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
         // Floating residents need no deck contact. Check nearby plots, then require
         // membership in this particular vent's sealed cells.
         double radius = Math.max(1, entity.getBbHeight());
-        var nearby = new BoundingBox3d(feet.x-radius, feet.y-radius, feet.z-radius, feet.x+radius, feet.y+radius, feet.z+radius);
-        for (var candidate : plots.queryIntersecting(nearby)) {
-            if (candidate != tracking && candidate != priorDeck && (surface = roomAt(vents, candidate, entity, previous)) != null) return surface;
+        for (var candidate : vents.orderedDecks) {
+            if (candidate == tracking || candidate == priorDeck) continue;
+            if (!candidate.boundingBox().intersects(feet.x - radius, feet.y - radius, feet.z - radius,
+                    feet.x + radius, feet.y + radius, feet.z + radius)) continue;
+            if ((surface = roomAt(vents, candidate, entity, previous)) != null) return surface;
         }
         return null;
     }
@@ -170,10 +183,16 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
         if (rooms == null || !(candidate instanceof ServerSubLevel deck) || deck.isRemoved()) return null;
         var feet = entity instanceof ServerPlayer player ? Spacewalk.contactFeet(player, deck, player.position()) : null;
         if (feet == null) feet = deck.logicalPose().transformPositionInverse(entity.position());
-        var cell = BlockPos.containing(feet.add(0, .025, 0));
+        var cell = BlockPos.containing(feet.x, feet.y + .025, feet.z);
+        BodyRoomProbe body = null;
         for (var room : rooms) {
+            var bounds = (RoomBounds)room;
+            if (!bounds.sableorbits$intersectsRoomBounds(cell, cell) || !room.contains(cell)) {
+                if (!(entity instanceof LivingEntity)) continue;
+                if (body == null) body = BodyRoomProbe.of(entity, deck, feet);
+                if (!body.intersects(room, bounds)) continue;
+            }
             if (!room.hasFluid(Fluids.OXYGEN)) continue;
-            if (!room.contains(cell) && (!(entity instanceof LivingEntity) || !bodyInRoom(entity, deck, feet, room))) continue;
             if (!(entity instanceof LivingEntity) && !restingInCabin(entity, deck, previous)) return null;
             var station = Stations.nativeStation(deck);
             float gravity = OrbitEnvironment.STANDARD_GRAVITY * (station == null ? 1 : station.gravityMultiplier);
@@ -182,23 +201,29 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
         return null;
     }
 
-    private static boolean bodyInRoom(Entity entity, SubLevel deck, Vec3 feet, AtmosphereBlob room) {
+    private record BodyRoomProbe(Vec3 center, BlockPos min, BlockPos max, double radiusSquared) {
         // A partial floor or wall can seal its entire cell while leaving space for
         // the player inside it. Test an inscribed sphere, which stays inside the
         // actual collider even when a swimming or deck-aligned body is rotated.
-        var offset = entity.getBoundingBox().getCenter().subtract(entity.position());
-        var center = feet.add(deck.logicalPose().transformNormalInverse(offset));
-        double radius = Math.min(.5, Math.min(entity.getBbWidth(), entity.getBbHeight()) * .5) - 1e-5;
-        if (radius <= 0) return false;
-        for (var pos : BlockPos.betweenClosed(BlockPos.containing(center.subtract(radius, radius, radius)),
-                BlockPos.containing(center.add(radius, radius, radius)))) {
-            if (!room.contains(pos)) continue;
-            double x = Stations.gap(center.x, pos.getX(), pos.getX()+1);
-            double y = Stations.gap(center.y, pos.getY(), pos.getY()+1);
-            double z = Stations.gap(center.z, pos.getZ(), pos.getZ()+1);
-            if (x*x + y*y + z*z < radius*radius) return true;
+        static BodyRoomProbe of(Entity entity, SubLevel deck, Vec3 feet) {
+            var offset = entity.getBoundingBox().getCenter().subtract(entity.position());
+            var center = feet.add(deck.logicalPose().transformNormalInverse(offset));
+            double radius = Math.max(0, Math.min(.5, Math.min(entity.getBbWidth(), entity.getBbHeight()) * .5) - 1e-5);
+            var min = BlockPos.containing(center.x - radius, center.y - radius, center.z - radius);
+            var max = BlockPos.containing(center.x + radius, center.y + radius, center.z + radius);
+            return new BodyRoomProbe(center, min, max, radius * radius);
         }
-        return false;
+
+        boolean intersects(AtmosphereBlob room, RoomBounds bounds) {
+            if (radiusSquared <= 0 || !bounds.sableorbits$intersectsRoomBounds(min, max)) return false;
+            for (var pos : BlockPos.betweenClosed(min, max)) {
+                double x = Stations.gap(center.x, pos.getX(), pos.getX() + 1);
+                double y = Stations.gap(center.y, pos.getY(), pos.getY() + 1);
+                double z = Stations.gap(center.z, pos.getZ(), pos.getZ() + 1);
+                if (x*x + y*y + z*z < radiusSquared && room.contains(pos)) return true;
+            }
+            return false;
+        }
     }
 
     private static boolean restingInCabin(Entity entity, SubLevel deck, Surface previous) {

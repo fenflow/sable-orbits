@@ -10,7 +10,7 @@ import java.util.*;
 
 final class ShipWires {
     record Link(BlockPos source, BlockPos sink, Direction face, String channel, int signal) {}
-    static List<Link> links(ServerLevel level) {
+    private static List<Link> links(ServerLevel level) {
         var manager = WireNetworkManager.get(level);
         var links = new ArrayList<Link>();
         manager.getNetwork().forEach((key,channels) -> {
@@ -21,24 +21,28 @@ final class ShipWires {
         });
         return links;
     }
-    static void neighbors(ServerSubLevel part, Collection<ServerSubLevel> queue, List<Link> links) {
-        var level=part.getLevel();
-        for (var link:links) {
-            var a=Sable.HELPER.getContaining(level,link.source());
-            var b=Sable.HELPER.getContaining(level,link.sink());
-            if (a==part && b instanceof ServerSubLevel s && b!=part) queue.add(s);
-            if (b==part && a instanceof ServerSubLevel s && a!=part) queue.add(s);
+    static Map<ServerSubLevel,Set<ServerSubLevel>> adjacency(ServerLevel level) {
+        var neighbors = new HashMap<ServerSubLevel,Set<ServerSubLevel>>();
+        for (var source : WireNetworkManager.get(level).getNetwork().entrySet()) {
+            if (!(Sable.HELPER.getContaining(level, BlockPos.of(source.getKey())) instanceof ServerSubLevel from)) continue;
+            for (var sinks : source.getValue().values()) for (var sink : sinks) {
+                if (Sable.HELPER.getContaining(level, BlockPos.of(sink.position())) instanceof ServerSubLevel to && to != from) {
+                    neighbors.computeIfAbsent(from, part -> new LinkedHashSet<>()).add(to);
+                    neighbors.computeIfAbsent(to, part -> new LinkedHashSet<>()).add(from);
+                }
+            }
         }
+        return neighbors;
     }
     static List<Link> onboard(ServerLevel level, Set<ServerSubLevel> members) {
         return links(level).stream().filter(l -> members.contains(Sable.HELPER.getContaining(level,l.source()))
             && members.contains(Sable.HELPER.getContaining(level,l.sink()))).toList();
     }
-    static void write(ServerLevel target,List<Link> links) {
+    static void write(ServerLevel target, List<Link> links, List<Link> staged) {
         for (var l:links) {
-            WireNetworkManager.createConnection(target,l.source(),l.sink(),l.face(),l.channel());
-            if (!WireNetworkManager.hasConnection(target,l.source(),l.sink(),l.face(),l.channel()))
+            if (!WireNetworkManager.createConnection(target,l.source(),l.sink(),l.face(),l.channel()).isSuccess())
                 throw new IllegalStateException("Could not restore wire at "+l.source());
+            staged.add(l);
             WireNetworkManager.trySetSignalAt(target,l.source(),l.channel(),l.signal());
         }
     }

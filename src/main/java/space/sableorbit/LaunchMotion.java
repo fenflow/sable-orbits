@@ -6,24 +6,29 @@ import com.ntmspace.world.CelestialBodies;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.entity.EntitySubLevelUtil;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
+import dev.ryanhcode.sable.companion.math.Pose3dc;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.EntityTypeTags;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.TraceableEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.projectile.AbstractHurtingProjectile;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.attachment.AttachmentType;
 import net.neoforged.neoforge.registries.*;
+import org.joml.Vector3d;
+import org.joml.Vector3dc;
 import java.util.function.Supplier;
 
 public final class LaunchMotion {
+    private static final double SOURCE_RADIUS = 1.5;
     static final DeferredRegister<AttachmentType<?>> TYPES = DeferredRegister.create(NeoForgeRegistries.Keys.ATTACHMENT_TYPES, "sableorbits");
     // Sedna advances a heading by a configurable distance per tick. Keep the launch
     // platform's displacement separate from that heading, including across saves.
@@ -64,33 +69,69 @@ public final class LaunchMotion {
     // Some dispensers and particle providers project their outlet into world coordinates
     // before spawning. Only attribute an anonymous emission to a nearby occupied block.
     static SubLevel nearbyHull(Level level, Vec3 position) {
-        double radius = 1.5;
-        double closest = radius * radius;
-        SubLevel source = null;
         var plots = SubLevelContainer.getContainer(level);
-        if (plots == null) return null;
+        if (plots == null || plots.getLoadedCount() == 0) return null;
+        var worldPoint = new Vector3d(position.x, position.y, position.z);
+        var local = new Vector3d();
+        double closest = SOURCE_RADIUS * SOURCE_RADIUS;
+        SubLevel source = null;
         for (var hull : plots.getAllSubLevels()) {
-            var local = hull.logicalPose().transformPositionInverse(position);
-            // At high speed the spatial index can still describe the preceding pose.
-            // Test this emission in the current pose, using the plot's occupied bounds.
+            var pose = hull.logicalPose();
             var bounds = hull.getPlot().getBoundingBox();
-            if (local.x < bounds.minX()-radius || local.x > bounds.maxX()+1+radius
-                    || local.y < bounds.minY()-radius || local.y > bounds.maxY()+1+radius
-                    || local.z < bounds.minZ()-radius || local.z > bounds.maxZ()+1+radius) continue;
-            var first = BlockPos.containing(local.x-radius, local.y-radius, local.z-radius);
-            var last = BlockPos.containing(local.x+radius, local.y+radius, local.z+radius);
-            for (var block : BlockPos.betweenClosed(first, last)) {
-                double distance = new AABB(block).distanceToSqr(local);
-                if (distance >= closest) continue;
-                var chunk = level.getChunkSource().getChunkNow(block.getX() >> 4, block.getZ() >> 4);
-                if (chunk != null && !chunk.getBlockState(block).isAir()) {
-                    closest = distance;
-                    source = hull;
-                    if (distance == 0) return hull;
-                }
+            if (outsideHullReach(pose, bounds, worldPoint)) continue;
+            pose.transformPositionInverse(worldPoint, local);
+            if (local.x < bounds.minX() - SOURCE_RADIUS || local.x > bounds.maxX() + 1 + SOURCE_RADIUS
+                    || local.y < bounds.minY() - SOURCE_RADIUS || local.y > bounds.maxY() + 1 + SOURCE_RADIUS
+                    || local.z < bounds.minZ() - SOURCE_RADIUS || local.z > bounds.maxZ() + 1 + SOURCE_RADIUS) continue;
+
+            double distance = nearestOccupiedDistance(level, local, closest);
+            if (distance < closest) {
+                source = hull;
+                closest = distance;
+                if (distance == 0) return hull;
             }
         }
         return source;
+    }
+
+    private static boolean outsideHullReach(Pose3dc pose, BoundingBox3ic bounds, Vector3dc worldPoint) {
+        // A sphere about the current pivot encloses the expanded occupied bounds at any rotation.
+        // Sable's cached world bounds may still describe the preceding pose during emission.
+        var pivot = pose.rotationPoint();
+        var scale = pose.scale();
+        double x = reach(bounds.minX(), bounds.maxX(), pivot.x(), scale.x());
+        double y = reach(bounds.minY(), bounds.maxY(), pivot.y(), scale.y());
+        double z = reach(bounds.minZ(), bounds.maxZ(), pivot.z(), scale.z());
+        return pose.position().distanceSquared(worldPoint) > x*x + y*y + z*z;
+    }
+
+    private static double reach(int min, int max, double pivot, double scale) {
+        return (Math.max(Math.abs(min - pivot), Math.abs(max + 1.0 - pivot)) + SOURCE_RADIUS) * Math.abs(scale) + 1e-6;
+    }
+
+    private static double nearestOccupiedDistance(Level level, Vector3dc local, double closest) {
+        int minX = Mth.floor(local.x() - SOURCE_RADIUS), maxX = Mth.floor(local.x() + SOURCE_RADIUS);
+        int minY = Mth.floor(local.y() - SOURCE_RADIUS), maxY = Mth.floor(local.y() + SOURCE_RADIUS);
+        int minZ = Mth.floor(local.z() - SOURCE_RADIUS), maxZ = Mth.floor(local.z() + SOURCE_RADIUS);
+        var chunks = level.getChunkSource();
+        for (int chunkZ = minZ >> 4; chunkZ <= maxZ >> 4; chunkZ++) {
+            for (int chunkX = minX >> 4; chunkX <= maxX >> 4; chunkX++) {
+                var chunk = chunks.getChunkNow(chunkX, chunkZ);
+                if (chunk == null) continue;
+                int startX = Math.max(minX, chunkX << 4), endX = Math.min(maxX, (chunkX << 4) + 15);
+                int startZ = Math.max(minZ, chunkZ << 4), endZ = Math.min(maxZ, (chunkZ << 4) + 15);
+                for (var block : BlockPos.betweenClosed(startX, minY, startZ, endX, maxY, endZ)) {
+                    double x = Stations.gap(local.x(), block.getX(), block.getX() + 1.0);
+                    double y = Stations.gap(local.y(), block.getY(), block.getY() + 1.0);
+                    double z = Stations.gap(local.z(), block.getZ(), block.getZ() + 1.0);
+                    double distance = x*x + y*y + z*z;
+                    if (distance >= closest || chunk.getBlockState(block).isAir()) continue;
+                    closest = distance;
+                    if (distance == 0) return 0;
+                }
+            }
+        }
+        return closest;
     }
 
     private static Entity owner(Entity entity) {

@@ -123,10 +123,10 @@ public final class StationLife {
                 present.add(address);
                 if(root!=part) continue;
                 if(t.getBoolean("needsHome")) {
-                    var home=OrbitSpaces.open(server,"station_"+root.getUniqueId());
-                    if(home!=level) {
+                    var name = "station_" + root.getUniqueId();
+                    if (!level.dimension().equals(OrbitSpaces.key(name))) {
                         var p=root.logicalPose().position();
-                        var moved=Flight.transfer(Flight.group(root),home,new Vec3(512-p.x,128-p.y,512-p.z));
+                        var moved=OrbitSpaces.transfer(Flight.group(root),name,new Vec3(512-p.x,128-p.y,512-p.z));
                         if(!moved.isEmpty()) for(var member:moved) Stations.info(member).remove("needsHome");
                         continue;
                     }
@@ -182,13 +182,13 @@ public final class StationLife {
         if(parent==null) return;
         var group=Flight.group(part);
         boolean equipped=computer(group);
-        var home=OrbitSpaces.open(server,"station_"+part.getUniqueId());
-        if(home==part.getLevel()) home=OrbitSpaces.open(server,"station_"+part.getUniqueId()+"_solo");
-        var p=part.logicalPose().position();
-        var moved=Flight.transfer(group,home,new Vec3(512-p.x,128-p.y,512-p.z));
-        if(moved.isEmpty()) return;
         var data=StationData.get(server);
         var addr=data.findFreeSpace();
+        if (data.getStationFromPosition(addr[0]*1024,addr[1]*1024) != null) return;
+        var p=part.logicalPose().position();
+        var moved=OrbitSpaces.transfer(group,OrbitSpaces.homeName(part.getLevel(),part.getUniqueId()),
+            new Vec3(512-p.x,128-p.y,512-p.z));
+        if(moved.isEmpty()) return;
         var station=data.addStation(addr[0],addr[1],parent.orbiting);
         station.name=(equipped?"Station ":"Space debris ")+addr[0]+", "+addr[1];station.hasStation=true;
         var t=Stations.info(original).copy();

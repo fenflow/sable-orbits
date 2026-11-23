@@ -36,13 +36,16 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -63,6 +66,7 @@ class FuselageTile extends TileEntityInventoryBase
     }
 
     record Port(BlockPos cell, Direction face) {}
+    private record FuelRelay(FuselageTile tank, FuselageTile firstHop) {}
 
     private RocketPart part;
     private BlockPos offset = BlockPos.ZERO;
@@ -93,7 +97,7 @@ class FuselageTile extends TileEntityInventoryBase
     }
 
     FuselageTile(BlockEntityType<?> type, BlockPos pos, BlockState state, int slots) {
-        super(type, pos, state, slots);
+        super(type, pos, state, state.getValue(FuselageBlock.MASTER) ? slots : 0);
     }
 
     static FluidTankNTM[] createTanks(RocketPart part) {
@@ -319,7 +323,8 @@ class FuselageTile extends TileEntityInventoryBase
 
     @Override public void onLoad() {
         super.onLoad();
-        refreshOnTick = true;
+        if (isMaster()) refreshOnTick = true;
+        else if (level instanceof ServerLevel server) server.scheduleTick(worldPosition, getBlockState().getBlock(), 1);
     }
 
     @Override public void refreshFluidPorts() {
@@ -437,6 +442,8 @@ class FuselageTile extends TileEntityInventoryBase
             budget -= accepted;
             if (accepted != 0) setChanged();
         }
+        FuselageTile remainderDestination = null;
+        boolean searchedRemainder = false;
         for (Port port : ports) {
             if (budget == 0) break;
             BlockPos target = port.cell().relative(port.face());
@@ -447,10 +454,15 @@ class FuselageTile extends TileEntityInventoryBase
             if (receiving == null) continue;
             int amount = Math.min(budget, receiving.getMaxFill() - receiving.getFill());
             if (canReceive() && other.canExport()) {
-                long difference = (long) tank.getFill() * receiving.getMaxFill() - (long) receiving.getFill() * tank.getMaxFill();
-                if (difference <= 0) continue;
-                long balance = difference / ((long) tank.getMaxFill() + receiving.getMaxFill());
-                amount = (int) Math.min(amount, Math.max(1, balance));
+                int balance = balanceAmount(tank, receiving);
+                if (balance == 0 && receiving.getFill() == 0 && amount > 0) {
+                    if (!searchedRemainder) {
+                        remainderDestination = remainderDestination(server, tank);
+                        searchedRemainder = true;
+                    }
+                    if (other == remainderDestination) balance = 1;
+                }
+                amount = Math.min(amount, balance);
             }
             if (amount <= 0) continue;
             int accepted = amount - (int) other.transferFluid(tank.getFluid(), tank.getPressure(), amount);
@@ -464,9 +476,73 @@ class FuselageTile extends TileEntityInventoryBase
         return balanceAmount(source.getFill(), source.getMaxFill(), destination.getFill(), destination.getMaxFill());
     }
 
-    private static int balanceAmount(int source, int sourceCapacity, int destination, int destinationCapacity) {
+    static int balanceAmount(int source, int sourceCapacity, int destination, int destinationCapacity) {
         long difference = (long)source * destinationCapacity - (long)destination * sourceCapacity;
         return (int)Math.max(0L, difference / ((long)sourceCapacity + destinationCapacity));
+    }
+
+    FuselageTile remainderDestination(ServerLevel server, FluidTankNTM sourceTank) {
+        // A sub-unit balance stays at rest unless a consumer can take the remaining fuel.
+        if (Math.floorMod(server.getGameTime() + worldPosition.asLong(), 10) != 0) return null;
+        FluidType fluid = sourceTank == null ? null : sourceTank.getFluid();
+        int pressure = sourceTank == null ? 0 : sourceTank.getPressure();
+        var visited = new HashSet<FuselageTile>();
+        var queue = new ArrayDeque<FuelRelay>();
+        visited.add(this);
+        queue.addLast(new FuelRelay(this, null));
+        while (!queue.isEmpty()) {
+            var relay = queue.removeFirst();
+            for (Port port : relay.tank().ports) {
+                var target = port.cell().relative(port.face());
+                if (!server.hasChunkAt(target)) continue;
+                var neighbor = server.getBlockEntity(target);
+                var side = port.face().getOpposite();
+                if (neighbor instanceof FuselageTile section) {
+                    var next = section.endTank(side);
+                    if (next == null || !next.canReceive() || visited.contains(next)) continue;
+                    if (!next.canExport()) {
+                        if (relay.firstHop() != null && next.hasRemainderSpace(fluid, pressure, false)) return relay.firstHop();
+                        continue;
+                    }
+                    if (!next.hasRemainderSpace(fluid, pressure, true)) continue;
+                    visited.add(next);
+                    queue.addLast(new FuelRelay(next, relay.firstHop() == null ? next : relay.firstHop()));
+                } else if (relay.firstHop() != null && !(neighbor instanceof IFluidPipeMK2)
+                        && (neighbor != null || !server.isEmptyBlock(target))
+                        && consumesRemainder(server, target, side, neighbor, fluid, pressure)) {
+                    return relay.firstHop();
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean hasRemainderSpace(FluidType fluid, int pressure, boolean empty) {
+        if (fluid == null) {
+            return this instanceof SolidFuselageTile magazine && magazine.charge() < magazine.capacity()
+                && (!empty || magazine.charge() == 0);
+        }
+        var tank = tankFor(fluid);
+        return tank != null && tank.getPressure() == pressure && tank.getFill() < tank.getMaxFill()
+            && (!empty || tank.getFill() == 0);
+    }
+
+    private static boolean consumesRemainder(ServerLevel server, BlockPos pos, Direction side,
+                                             BlockEntity neighbor, FluidType fluid, int pressure) {
+        if (fluid == null) {
+            var engine = neighbor instanceof EngineTile section ? section.solidInlet(side) : null;
+            return engine != null && engine.hasSolidSpace();
+        }
+        var user = NativeContacts.fluidAt(server, pos, side, fluid, CapRole.FLUID_IN);
+        if (user instanceof IFluidReceiverMK2 receiver) {
+            return receiver.getDemand(fluid, pressure) > 0 && receiver.getReceiverSpeed(fluid, pressure) > 0
+                && (!(receiver instanceof IFluidProviderMK2 provider) || provider.getFluidAvailable(fluid, pressure) == 0);
+        }
+        if (fluid.getFluid() == null) return false;
+        var handler = server.getCapability(Capabilities.FluidHandler.BLOCK, pos, side);
+        if (handler == null) return false;
+        var unit = new FluidStack(fluid.getFluid(), 1);
+        return handler.drain(unit, FluidAction.SIMULATE).isEmpty() && handler.fill(unit, FluidAction.SIMULATE) > 0;
     }
 
     private int pushToMachine(ServerLevel server, FluidTankNTM tank, BlockPos pos, Direction side, int amount) {

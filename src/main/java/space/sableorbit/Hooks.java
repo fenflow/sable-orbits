@@ -71,9 +71,9 @@ public final class Hooks {
         BlockMultiblockCore.withoutTeardown(() -> {
             var part = SubLevelAssemblyHelper.assembleBlocks(level, pos, cells, BoundingBox3i.from(cells));
             if (part == null) return;
-            var target = OrbitSpaces.open(level.getServer(), "station_" + part.getUniqueId());
             var p = part.logicalPose().position();
-            var copies = Flight.transfer(List.of(part), target, new Vec3(512-p.x,128-p.y,512-p.z));
+            var copies = OrbitSpaces.transfer(List.of(part), "station_" + part.getUniqueId(),
+                new Vec3(512-p.x,128-p.y,512-p.z), standing);
             var active = copies.isEmpty() ? part : copies.getFirst();
             var tag = new net.minecraft.nbt.CompoundTag();
             tag.putUUID("root", part.getUniqueId());
@@ -81,8 +81,6 @@ public final class Hooks {
             tag.putInt("z", station.dZ);
             if (!standing.isEmpty()) tag.putUUID("owner",standing.getFirst().getUUID());
             Stations.set(active,tag);
-            if (!copies.isEmpty()) for (var player : standing) if (player.level() == level)
-                player.teleportTo(target,player.getX()+512-p.x,player.getY()+128-p.y,player.getZ()+512-p.z,player.getYRot(),player.getXRot());
             station.hasStation = true;
             StationData.get(level.getServer()).setDirty();
         });

@@ -67,18 +67,26 @@ public final class Docking {
         var tag = rocket.getPersistentData();
         var level = (ServerLevel)rocket.level();
         if (tag.hasUUID("sableorbits_dock")) {
-            var part = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(level).getSubLevel(tag.getUUID("sableorbits_dock"));
-            if (part instanceof ServerSubLevel s && Stations.nativeStation(s) != null) return Stations.nativeStation(s).getPort();
+            var container = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(level);
+            if (container != null && container.getSubLevel(tag.getUUID("sableorbits_dock")) instanceof ServerSubLevel part) {
+                var dock = receivingPort(Stations.nativeStation(part));
+                if (dock != null && dock.getLevel() == level && level.getBlockEntity(dock.getBlockPos()) == dock) return dock;
+            }
         }
         return null;
+    }
+
+    public static TileEntityOrbitalStation receivingPort(OrbitalStation station) {
+        var port = station == null ? null : station.getPort();
+        return port == null || port.isRemoved() ? null : port;
     }
     public static boolean redirect(Entity passenger,double x,double z) {
         var server = passenger.getServer();
         if (server == null) return false;
         var station = addressed(server,(int)Math.floor(x),(int)Math.floor(z));
         if (station == null) return false;
-        var dock = Stations.nativeStation(station).getPort();
-        if (dock == null || dock.isRemoved()) return true;
+        var dock = receivingPort(Stations.nativeStation(station));
+        if (dock == null) return true;
         var pos = Sable.HELPER.projectOutOfSubLevel(station.getLevel(),dock.getBlockPos().getCenter().add(0,-12,0));
         passenger.getRootVehicle().getPersistentData().remove("sableorbits_gap");
         passenger.getRootVehicle().getPersistentData().putUUID("sableorbits_dock",station.getUniqueId());

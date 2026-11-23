@@ -6,10 +6,11 @@
     "EvaInputMixin", "EvaSwimModelMixin", "EquipmentKeyMixin", "EquipmentOptionsMixin",
     "ParticleMotionMixin","ParticleDriftMixin","ParticleEmitterMixin", "StationExhaustMixin", "DeckCollisionMixin", "InterpolatorAccess", "EvaPositionMixin", "EvaSendMixin", "StaffLocksMixin", "OrbitCloudMixin", "OrbitHorizonMixin","BerthRenderMixin","DockPickMixin","DockDebugMixin"],
   "mixins": [
-    "CabinGravityMixin", "DecompressionMixin", "AttitudeMovementMixin",
+    "CabinGravityMixin", "DecompressionMixin", "VentRoomBoundsMixin", "AttitudeMovementMixin",
     "BodyGeometryMixin", "BodyCollisionMixin", "DeckTravelMixin", "DeckMoveControlMixin", "DeckNavigationMixin", "DeckPathBoundsMixin", "DeckBoatMixin", "SeatDismountMixin",
     "OrbitEntityMixin", "ServerAccess", "VoidTerrainMixin", "StationAddressMixin", "EvaFrictionMixin", "EvaPlayerMixin", "EvaPacketMixin",
-    "PlayerDropMixin", "FlightVelocityMixin", "LaunchMixin", "ShotMixin", "OrbitalItemGravityMixin", "ItemMotionMixin",
+    "PlayerDropMixin", "FlightVelocityMixin", "FlightRollbackTravelMixin", "FlightRollbackJoinMixin", "FlightRollbackMountMixin",
+    "LaunchMixin", "ShotMixin", "OrbitalItemGravityMixin", "ItemMotionMixin",
     "VacuumDragMixin", "FireballMotionMixin", "FireworkMotionMixin", "FishingGravityMixin",
     "SednaMotionMixin", "LegacyBulletMixin", "BouncyGravityMixin", "ThrownGravityMixin", "TrackingMixin",
     "OrbitMixin",

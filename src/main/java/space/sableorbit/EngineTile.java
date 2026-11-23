@@ -187,6 +187,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         @Override public void setChanged() { EngineTile.this.setChanged(); }
     }
     int solidFuel() { return solid; }
+    boolean hasSolidSpace() { return solid < CAPACITY; }
     int acceptSolid(int units) {
         if (!(level instanceof ServerLevel) || solidInput == null || isRemoved() || units <= 0) return 0;
         int accepted = Math.min(units, CAPACITY - solid);

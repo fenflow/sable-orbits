@@ -48,6 +48,8 @@ final class SolidFuselageTile extends FuselageTile {
                 if (engine != null) charge -= engine.acceptSolid(charge);
             }
         }
+        FuselageTile remainderDestination = null;
+        boolean searchedRemainder = false;
         for (Port port : endPorts()) {
             var target = port.cell().relative(port.face());
             if (charge == 0) break;
@@ -57,10 +59,15 @@ final class SolidFuselageTile extends FuselageTile {
             int amount = Math.min(charge, other.capacity() - other.charge);
             if (canReceive() && other.canExport()) {
                 // Equalize connected two-way magazines so the upstream charge stays available for demand at either end.
-                long difference = (long) charge * other.capacity() - (long) other.charge * capacity();
-                if (difference <= 0) continue;
-                long balance = difference / ((long) capacity() + other.capacity());
-                amount = (int) Math.min(amount, Math.max(1, balance));
+                int balance = balanceAmount(charge, capacity(), other.charge, other.capacity());
+                if (balance == 0 && other.charge == 0 && amount > 0) {
+                    if (!searchedRemainder) {
+                        remainderDestination = remainderDestination(server, null);
+                        searchedRemainder = true;
+                    }
+                    if (other == remainderDestination) balance = 1;
+                }
+                amount = Math.min(amount, balance);
             }
             if (amount <= 0) continue;
             charge -= amount;

@@ -13,6 +13,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.ViewportEvent;
@@ -71,19 +72,30 @@ public final class AttitudeClient {
         return update(player, (float)horizontal * .15f, (float)vertical * .15f, 0, false);
     }
 
+    @SubscribeEvent static void logout(ClientPlayerNetworkEvent.LoggingOut event) {
+        clearPlayer();
+    }
+
     @SubscribeEvent static void tick(ClientTickEvent.Pre event) {
         var mc = Minecraft.getInstance();
         if (mc.player == null) {
-            pilot = null;
-            deck = null;
-            free = false;
-            remote.clear();
+            clearPlayer();
             return;
         }
         if (mc.isPaused()) return;
         float roll = mc.screen == null
             ? 4.5f * ((Keys.RIGHT.isDown() ? 1 : 0) - (Keys.LEFT.isDown() ? 1 : 0)) : 0;
         update(mc.player, 0, 0, roll, true);
+    }
+
+    private static void clearPlayer() {
+        pilot = null;
+        deck = null;
+        floor = null;
+        free = false;
+        rollStep = 0;
+        remote.clear();
+        resetCamera(null);
     }
 
     private static boolean update(LocalPlayer player, float yaw, float pitch, float roll, boolean tick) {
@@ -229,18 +241,21 @@ public final class AttitudeClient {
         return Mth.wrapDegrees((float)Math.toDegrees(2 * Math.atan2(twist.z, twist.w)));
     }
 
+    private static void resetCamera(LocalPlayer player) {
+        cameraPlayer = player;
+        cameraFloor = null;
+        cameraFace = null;
+        blendStart = -100;
+        fromRoll = shownRoll = 0;
+        fromUp = shownUp = WORLD_UP;
+    }
+
     public static RenderPose cameraPose(LivingEntity living, float partial) {
         var target = pose(living, partial);
         if (!(living instanceof LocalPlayer player)) return target;
-        if (player != cameraPlayer || player.isPassenger() || player.isSleeping() || OrbitSpaces.isolated(player.level())) {
-            cameraPlayer = player;
-            cameraFloor = null;
-            cameraFace = null;
-            blendStart = -100;
-            shownRoll = 0;
-            shownUp = WORLD_UP;
-            if (player.isPassenger() || player.isSleeping() || OrbitSpaces.isolated(player.level())) return target;
-        }
+        boolean blend = !player.isPassenger() && !player.isSleeping() && !OrbitSpaces.isolated(player.level());
+        if (player != cameraPlayer || !blend) resetCamera(player);
+        if (!blend) return target;
         float time = player.tickCount + partial;
         if (target == null && cameraFloor == null && time >= blendStart + 6) {
             shownUp = WORLD_UP;

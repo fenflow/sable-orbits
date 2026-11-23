@@ -17,17 +17,22 @@ public final class Berth {
         if(r.getState()==EntityRideableRocket.RocketState.DOCKING) return gap+.1f*(1-partial);
         return r.isUndocking()?Math.max(0,gap-.1f*(1-partial)):gap;
     }
-    public static void tick(EntityRideableRocket r) {
+    /** Returns whether an arriving rocket is waiting for its destination dock to load or be replaced. */
+    public static boolean tick(EntityRideableRocket r) {
         var tag=r.getPersistentData();
         var state=r.getState();
         boolean arriving=state==EntityRideableRocket.RocketState.DOCKING;
         var dock=arriving ? Docking.port(r) : tag.contains("sableorbits_port") && r.level().getBlockEntity(BlockPos.of(tag.getLong("sableorbits_port"))) instanceof com.ntmspace.tileentity.station.TileEntityOrbitalStation d ? d:null;
         if(dock==null || (!arriving && !r.isUndocking() && !tag.hasUUID("sableorbits_berth"))) {
-            r.getEntityData().set(PORT,BlockPos.ZERO);return;
+            r.getEntityData().set(PORT,BlockPos.ZERO);
+            return arriving;
         }
         var pos=dock.getBlockPos();
         var part=dev.ryanhcode.sable.Sable.HELPER.getContaining(r.level(),pos);
-        if(part==null)return;
+        if (part == null) {
+            r.getEntityData().set(PORT, BlockPos.ZERO);
+            return arriving;
+        }
         float gap=0;
         if(arriving) {
             gap=Math.max(0,tag.getFloat("sableorbits_gap")-.1f);
@@ -43,6 +48,23 @@ public final class Berth {
         r.getEntityData().set(GAP,gap);
         r.setPos(part.logicalPose().transformPosition(base(r,pos,gap)));
         r.setDeltaMovement(Vec3.ZERO);
+        return false;
+    }
+
+    public static void abortApproach(EntityRideableRocket rocket) {
+        var data = rocket.getPersistentData();
+        data.remove("sableorbits_dock");
+        data.remove("sableorbits_gap");
+        data.remove("sableorbits_port");
+        data.remove("sableorbits_berth");
+        rocket.getEntityData().set(PORT, BlockPos.ZERO);
+        rocket.getEntityData().set(GAP, 0f);
+        rocket.setDeltaMovement(Vec3.ZERO);
+        rocket.setState(rocket.isReusable() ? EntityRideableRocket.RocketState.NEEDSFUEL : EntityRideableRocket.RocketState.LANDED);
+        if (rocket.getFirstPassenger() instanceof net.minecraft.server.level.ServerPlayer player) {
+            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                "The receiving orbital dock is unavailable. The rocket has stopped its approach."), false);
+        }
     }
 }
 
