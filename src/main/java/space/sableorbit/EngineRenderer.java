@@ -14,8 +14,10 @@ final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
         var bounds = tile.bounds();
         if (!tile.isBurning() || tile.engine() == null) return bounds;
         var direction = tile.getBlockState().getValue(EngineBlock.FACING);
-        return bounds.expandTowards(Vec3.atLowerCornerOf(direction.getNormal()).scale(EnginePlume.maxLength(tile.engine())));
+        return bounds.expandTowards(Vec3.atLowerCornerOf(direction.getNormal()).scale(EnginePlume.maxLength(tile.engine())))
+            .inflate(EnginePlume.modelWidth(tile.engine()) * 1.5);
     }
+    @Override public int getViewDistance() { return 350; }
     @Override public void render(EngineTile tile,float tick,PoseStack pose,MultiBufferSource buffers,int light,int overlay) {
         var part = tile.engine();
         if (part == null || !tile.isMaster()) return;
@@ -40,7 +42,9 @@ final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
         pose.popPose();
         if (tile.isBurning()) {
             float time = (tile.getLevel().getGameTime() % 24000) + tick;
-            EnginePlume.render(part, pose, buffers, time, tile.getBlockPos().hashCode() & 255);
+            if (EngineEffects.atmospheric((net.minecraft.client.multiplayer.ClientLevel)tile.getLevel()))
+                EngineEffects.flares(tile, pose, buffers, tick, time);
+            else EnginePlume.render(part, pose, buffers, time, tile.getBlockPos().hashCode() & 255);
         }
         pose.popPose();
     }

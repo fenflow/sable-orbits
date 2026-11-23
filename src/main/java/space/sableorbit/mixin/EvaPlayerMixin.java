@@ -20,6 +20,11 @@ abstract class EvaPlayerMixin implements Spacewalk.Travel {
     @Unique private static final EntityDimensions sableorbits$swimmer = EntityDimensions.scalable(.56f, .56f).withEyeHeight(.28f);
     @Unique private boolean sableorbits$wasFree;
 
+    @ModifyReturnValue(method="isStayingOnGroundSurface", at=@At("RETURN"))
+    private boolean sneakAtDeckEdge(boolean sneaking) {
+        return sneaking && !Attitude.free((Player)(Object)this);
+    }
+
     @ModifyReturnValue(method="getDefaultDimensions", at=@At("RETURN"))
     private EntityDimensions compactSwimmer(EntityDimensions normal, Pose pose) {
         return pose == Pose.SWIMMING && Attitude.free((Player)(Object)this) ? sableorbits$swimmer : normal;

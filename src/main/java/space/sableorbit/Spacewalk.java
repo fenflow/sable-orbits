@@ -138,6 +138,16 @@ public final class Spacewalk {
         return ref;
     }
 
+    // A grounded packet's world position belongs to the hull pose at acceptance.
+    // Until another move is accepted, use its plot coordinates for cabin queries.
+    static Vec3 contactFeet(ServerPlayer player, SubLevel deck, Vec3 accepted) {
+        var boarding = Boarding.pendingFeet(player, deck);
+        if (boarding != null) return boarding;
+        if (Sable.HELPER.getTrackingSubLevel(player) != deck) return null;
+        var ref = reference(player);
+        return ref != null && ref.deck == deck && accepted.equals(ref.world) ? ref.feet : null;
+    }
+
     static void tick(ServerPlayer player) {
         if (player.isPassenger()) { observeContact(player); return; }
         var ref = reference(player);

@@ -1,7 +1,9 @@
 package space.sableorbit;
 
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
+import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -44,7 +46,11 @@ public final class Boarding {
                 var arrival = pending.get(player);
                 if (arrival != null && arrival.target.ticket.equals(ready.ticket) && arrival.target.level == player.level().dimension()) {
                     follow(player);
-                    pending.remove(player);
+                    if (pending.remove(player) != null) {
+                        var deck = GravityFrame.resolve(player).deck();
+                        if (deck != null && deck.getUniqueId().equals(arrival.target.hull))
+                            ((EntityMovementExtension)player).sable$setTrackingSubLevel(deck);
+                    }
                 }
             }
         });
@@ -52,8 +58,12 @@ public final class Boarding {
 
     static void arrive(ServerPlayer player, ServerSubLevel deck, Vec3 feet, boolean onDeck) {
         var level = deck.getLevel();
-        var target = new Target(level.dimension(),deck.getUniqueId(),deck.logicalPose().transformPositionInverse(feet),onDeck,UUID.randomUUID());
         player.teleportTo(level,feet.x,feet.y,feet.z,player.getYRot(),player.getXRot());
+        followOnLoad(player, deck, feet, onDeck);
+    }
+
+    static void followOnLoad(ServerPlayer player, ServerSubLevel deck, Vec3 feet, boolean onDeck) {
+        var target = new Target(deck.getLevel().dimension(),deck.getUniqueId(),deck.logicalPose().transformPositionInverse(feet),onDeck,UUID.randomUUID());
         Spacewalk.remember(player,deck);
         player.setDeltaMovement(Vec3.ZERO);
         player.fallDistance = 0;
@@ -64,6 +74,12 @@ public final class Boarding {
     }
 
     public static boolean pending(ServerPlayer player) { return pending.containsKey(player); }
+
+    static Vec3 pendingFeet(ServerPlayer player, SubLevel deck) {
+        var arrival = pending.get(player);
+        return arrival != null && arrival.target.level == player.level().dimension() && arrival.target.hull.equals(deck.getUniqueId())
+            ? arrival.target.feet : null;
+    }
 
     static void follow(ServerPlayer player) {
         var arrival = pending.get(player);

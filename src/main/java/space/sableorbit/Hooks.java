@@ -100,6 +100,14 @@ public final class Hooks {
     public static boolean travelLocked(MinecraftServer server, OrbitalStation station) {
         return Rendezvous.stations(server).stream().anyMatch(s -> Stations.nativeStation(s) == station && Rendezvous.linked(Stations.info(s)));
     }
+
+    public static OrbitalStation stationInTransfer(Level level, BlockPos pos) {
+        if (!(level instanceof ServerLevel) || !OrbitSpaces.isolated(level)
+                || !(Sable.HELPER.getContaining(level, pos) instanceof ServerSubLevel part)) return null;
+        var station = Stations.nativeStation(part);
+        return station != null && station.state != OrbitalStation.StationState.ORBIT ? station : null;
+    }
+
     // Size and thrust belong to the burn that launched the station. A thruster
     // can detach or unload during the turn, before NTM asks for the cruise time.
     public static int mobileCruiseTime(ServerLevel level, OrbitalStation station, float thrust, boolean beginBurn) {

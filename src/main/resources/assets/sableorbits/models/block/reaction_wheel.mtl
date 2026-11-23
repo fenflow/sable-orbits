@@ -1,8 +1,12 @@
-newmtl housing
-map_Kd minecraft:block/smooth_stone
+# Blender 5.3.0 MTL File: 'reaction_wheel.blend'
+# www.blender.org
 
-newmtl rim
-map_Kd minecraft:block/iron_block
-
-newmtl socket
-map_Kd minecraft:block/polished_deepslate
+newmtl Material.001
+Ns 0.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd sableorbits:block/reaction_wheel

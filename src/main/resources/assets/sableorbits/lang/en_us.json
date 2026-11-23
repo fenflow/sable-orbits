@@ -1,6 +1,13 @@
 {
   "block.sableorbits.rocket_engine": "Rocket Engine",
+  "block.sableorbits.rocket_fuselage": "Rocket Fuselage",
   "block.sableorbits.reaction_wheel": "Reaction Wheel",
+  "tooltip.sableorbits.fuselage.capacity": "(Amount of fuel when placed as a block: %smB)",
+  "tooltip.sableorbits.fuselage.solid_capacity": "(Amount of fuel when placed as a block: %s units)",
+  "gui.sableorbits.fuselage.solid_amount": "%s / %s units",
+  "gui.sableorbits.fuselage.input": "Input only",
+  "gui.sableorbits.fuselage.input_export": "Input + export",
+  "gui.sableorbits.fuselage.export": "Export only",
   "key.sableorbits.roll_left": "Roll left in zero gravity",
   "key.sableorbits.roll_right": "Roll right in zero gravity"
 }

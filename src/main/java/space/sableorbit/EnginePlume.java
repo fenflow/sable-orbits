@@ -14,7 +14,12 @@ import java.util.Map;
 
 final class EnginePlume {
     // Offsets and bell radii are fractions of the rendered mesh width. Recess is a fraction of its height.
-    private record Bell(float x, float z, float recess, float radius) {}
+    record Bell(float x, float z, float recess, float radius) {
+        net.minecraft.world.phys.Vec3 outlet(RocketPart part) {
+            float width = modelWidth(part);
+            return new net.minecraft.world.phys.Vec3(x * width, (recess - .5) * part.height() - .015, z * width);
+        }
+    }
     private static List<Bell> ring(int count, double offset, double recess, double radius) {
         var bells = new ArrayList<Bell>(count);
         for (int i = 0; i < count; i++) {
@@ -54,20 +59,40 @@ final class EnginePlume {
     }
     static double maxLength(RocketPart part) { return 2.7 * modelWidth(part) + 0.5; }
 
-    static void render(RocketPart part, PoseStack pose, MultiBufferSource buffers, float time, int phase) {
+    static List<Bell> bells(RocketPart part) {
         var mesh = part.getModel(false);
-        var bells = mesh == null ? SINGLE : BELLS.getOrDefault(mesh.getPath(), SINGLE);
-        int sprite = switch (part.fuel()) {
-            case "HYDROGEN" -> 1;
-            case "METHALOX" -> 2;
-            case "XENON" -> 3;
-            case "BALEFIRE" -> 4;
-            case "HYDRAZINE" -> 5;
-            default -> 0;
+        return mesh == null ? SINGLE : BELLS.getOrDefault(mesh.getPath(), SINGLE);
+    }
+
+    enum Fuel {
+        KEROSENE(0, 1f, .38f, .08f), HYDROGEN(1, .26f, .55f, 1f),
+        METHALOX(2, .62f, .32f, 1f), XENON(3, .15f, .85f, 1f),
+        BALEFIRE(4, .25f, 1f, .12f), HYDRAZINE(5, 1f, .65f, .32f);
+
+        final int sprite;
+        final com.hbm.particle.RocketFlameColor flame;
+        Fuel(int sprite, float r, float g, float b) {
+            this.sprite = sprite;
+            flame = new com.hbm.particle.RocketFlameColor(r, g, b, true, true, true, 240);
+        }
+    }
+
+    static Fuel fuel(RocketPart part) {
+        return switch (part.fuel()) {
+            case "HYDROGEN" -> Fuel.HYDROGEN;
+            case "METHALOX" -> Fuel.METHALOX;
+            case "XENON" -> Fuel.XENON;
+            case "BALEFIRE" -> Fuel.BALEFIRE;
+            case "HYDRAZINE" -> Fuel.HYDRAZINE;
+            default -> Fuel.KEROSENE;
         };
+    }
+
+    static void render(RocketPart part, PoseStack pose, MultiBufferSource buffers, float time, int phase) {
+        int sprite = fuel(part).sprite;
         var vertices = buffers.getBuffer(PLUME);
         float width = modelWidth(part);
-        for (var bell : bells) {
+        for (var bell : bells(part)) {
             float radius = width * bell.radius * 0.88f;
             float pulse = (float)Math.sin(time * 1.2 + phase + 17 * bell.x + 7 * bell.z);
             float length = (radius * 5 + width * 0.22f) * (1 + 0.07f * pulse);

@@ -17,6 +17,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -30,6 +31,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.attachment.AttachmentType;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
@@ -63,7 +65,16 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
         TYPES.register(bus);
         NeoForge.EVENT_BUS.addListener((EntityTickEvent.Pre event) -> {
             var entity = event.getEntity();
+            if (entity instanceof ServerPlayer && OrbitSpaces.isolated(entity.level())) return;
             if (!entity.level().isClientSide && (entity instanceof LivingEntity || nonliving(entity))) update(entity);
+        });
+        NeoForge.EVENT_BUS.addListener((PlayerEvent.PlayerLoggedInEvent event) -> {
+            if (event.getEntity() instanceof ServerPlayer player && OrbitSpaces.isolated(player.level())
+                    && !player.isPassenger() && !player.isSpectator() && !player.isSleeping()) {
+                // Capture the login position before the first occupied physics tick.
+                update(player);
+                if (resolve(player).deck() instanceof ServerSubLevel deck) Boarding.followOnLoad(player, deck, player.position(), true);
+            }
         });
     }
 
@@ -157,16 +168,37 @@ public record GravityFrame(SubLevel deck, Direction localUp, boolean artificial,
     private static Surface roomAt(Vents vents, SubLevel candidate, Entity entity, Surface previous) {
         var rooms = vents.byDeck.get(candidate);
         if (rooms == null || !(candidate instanceof ServerSubLevel deck) || deck.isRemoved()) return null;
-        // Feet resting exactly on a rotated tile can round to the solid cell below.
-        var cell = BlockPos.containing(deck.logicalPose().transformPositionInverse(entity.position()).add(0, .025, 0));
+        var feet = entity instanceof ServerPlayer player ? Spacewalk.contactFeet(player, deck, player.position()) : null;
+        if (feet == null) feet = deck.logicalPose().transformPositionInverse(entity.position());
+        var cell = BlockPos.containing(feet.add(0, .025, 0));
         for (var room : rooms) {
-            if (!room.contains(cell) || !room.hasFluid(Fluids.OXYGEN)) continue;
+            if (!room.hasFluid(Fluids.OXYGEN)) continue;
+            if (!room.contains(cell) && (!(entity instanceof LivingEntity) || !bodyInRoom(entity, deck, feet, room))) continue;
             if (!(entity instanceof LivingEntity) && !restingInCabin(entity, deck, previous)) return null;
             var station = Stations.nativeStation(deck);
             float gravity = OrbitEnvironment.STANDARD_GRAVITY * (station == null ? 1 : station.gravityMultiplier);
             return new Surface(deck.getUniqueId(), Direction.UP, gravity < .2f ? 0 : gravity);
         }
         return null;
+    }
+
+    private static boolean bodyInRoom(Entity entity, SubLevel deck, Vec3 feet, AtmosphereBlob room) {
+        // A partial floor or wall can seal its entire cell while leaving space for
+        // the player inside it. Test an inscribed sphere, which stays inside the
+        // actual collider even when a swimming or deck-aligned body is rotated.
+        var offset = entity.getBoundingBox().getCenter().subtract(entity.position());
+        var center = feet.add(deck.logicalPose().transformNormalInverse(offset));
+        double radius = Math.min(.5, Math.min(entity.getBbWidth(), entity.getBbHeight()) * .5) - 1e-5;
+        if (radius <= 0) return false;
+        for (var pos : BlockPos.betweenClosed(BlockPos.containing(center.subtract(radius, radius, radius)),
+                BlockPos.containing(center.add(radius, radius, radius)))) {
+            if (!room.contains(pos)) continue;
+            double x = Stations.gap(center.x, pos.getX(), pos.getX()+1);
+            double y = Stations.gap(center.y, pos.getY(), pos.getY()+1);
+            double z = Stations.gap(center.z, pos.getZ(), pos.getZ()+1);
+            if (x*x + y*y + z*z < radius*radius) return true;
+        }
+        return false;
     }
 
     private static boolean restingInCabin(Entity entity, SubLevel deck, Surface previous) {

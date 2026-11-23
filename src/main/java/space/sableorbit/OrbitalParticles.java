@@ -5,10 +5,13 @@ import com.ntmspace.orbit.Orbit;
 import dev.ryanhcode.sable.api.particle.ParticleSubLevelKickable;
 import dev.ryanhcode.sable.mixinterface.particle.ParticleExtension;
 import dev.ryanhcode.sable.sublevel.ClientSubLevel;
+import java.util.function.BiConsumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.Particle;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 public final class OrbitalParticles {
@@ -20,9 +23,34 @@ public final class OrbitalParticles {
     }
     public static Entity emitter;
     public static Drifting parent;
+    private static Vec3 stationExhaustCarrier;
+
+    public static void emitStationExhaust(Level level, BlockPos enginePos, Vec3 plotOrigin, Vec3 plotVelocity,
+                                          BiConsumer<Vec3, Vec3> spawn) {
+        if (!OrbitSpaces.isolated(level) || !(Sable.HELPER.getContaining(level, enginePos) instanceof ClientSubLevel hull)) {
+            spawn.accept(plotOrigin, plotVelocity);
+            return;
+        }
+        var pose = hull.logicalPose();
+        var worldOrigin = pose.transformPosition(plotOrigin);
+        var worldVelocity = pose.transformNormal(plotVelocity);
+        var previous = stationExhaustCarrier;
+        stationExhaustCarrier = DeckFrame.velocityAt(hull, worldOrigin);
+        try {
+            spawn.accept(worldOrigin, worldVelocity);
+        } finally {
+            stationExhaustCarrier = previous;
+        }
+    }
 
     public static void launch(ClientLevel level, Particle particle) {
-        if (!Orbit.inOrbit(level)) return;
+        if (stationExhaustCarrier != null) {
+            // HBM damps the exhaust velocity. Carry hull motion separately on Sable's clock.
+            ((Drifting)particle).sableorbits$launch(stationExhaustCarrier);
+            return;
+        }
+        // Engine motes already carry the complete world velocity sampled at their own nozzle.
+        if (!Orbit.inOrbit(level) || ((Drifting)particle).sableorbits$velocity() != null) return;
         var nativeParticle=(ParticleExtension)particle;
         nativeParticle.sable$initialKickOut();
         var position=particle.getPos();

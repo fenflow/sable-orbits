@@ -1,5 +1,6 @@
 package space.sableorbit;
 
+import com.hbm.api.fluidmk2.IFluidMultiUserMK2;
 import com.hbm.api.fluidmk2.IFluidStandardReceiverMK2;
 import com.hbm.inventory.fluid.*;
 import com.hbm.inventory.fluid.tank.FluidTankNTM;
@@ -11,6 +12,8 @@ import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import net.minecraft.core.*;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -18,14 +21,21 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
+import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.items.wrapper.InvWrapper;
 import java.util.*;
 
-final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2, IFluidHandler {
+final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2, IFluidMultiUserMK2, IFluidHandler {
     private static final double PHYSICAL_THRUST_SCALE = 0.01;
     private static final int CAPACITY = 16000;
+    private static final int LIQUID_BURN_MULTIPLIER = 10;
+    private static final int SOLID_BURN_PER_TICK = 10;
+    private static final int[] SOLID_SLOTS = {0};
+    private static final int[] NO_SLOTS = {};
     private RocketPart engine;
     private BlockPos offset = BlockPos.ZERO;
     private FluidTankNTM[] tanks = {};
+    private SolidInput solidInput;
     private int solid;
     private boolean burning;
     private boolean refreshPortsOnTick;
@@ -40,6 +50,8 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
                 .filter(f -> f != null && f != Fluids.NONE).map(f -> new FluidTankNTM(f,CAPACITY)).toArray(FluidTankNTM[]::new);
             for (var tank : tanks) tank.bindOwner(this);
         }
+        if (part == null || !isMaster() || !"SOLID".equals(part.fuel())) solidInput = null;
+        else if (solidInput == null) solidInput = new SolidInput();
         setChanged();
     }
     RocketPart engine() { return engine; }
@@ -53,29 +65,84 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     @Override public net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket getUpdatePacket() {
         return net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket.create(this);
     }
-    private Direction nozzle() { return getBlockState().getValue(EngineBlock.FACING); }
+    Direction nozzle() { return getBlockState().getValue(EngineBlock.FACING); }
+    private boolean rearSection() { return offset.get(nozzle().getAxis()) == 0; }
+    private boolean rearInlet(Direction side) { return side == nozzle().getOpposite() && rearSection(); }
     boolean inlet(Direction side) {
-        if (side == null || engine == null || !isMaster()) return false;
-        Direction exhaust = nozzle();
-        return side == exhaust.getOpposite() || (tanks.length > 1 && side.getAxis() != exhaust.getAxis());
+        if (side == null || engine == null) return false;
+        return rearInlet(side) || (isMaster() && tanks.length > 1 && side.getAxis() != nozzle().getAxis());
+    }
+    private EngineTile master() {
+        if (engine == null || isRemoved()) return null;
+        if (isMaster()) return this;
+        var masterPos = worldPosition.offset(offset);
+        return level != null && level.hasChunkAt(masterPos) && level.getBlockEntity(masterPos) instanceof EngineTile master
+            && !master.isRemoved() && master.isMaster() && master.engine == engine && master.nozzle() == nozzle() ? master : null;
+    }
+    EngineTile fluidInlet(Direction side) {
+        if (!inlet(side)) return null;
+        var master = master();
+        return master != null && master.tanks.length > 0 ? master : null;
+    }
+    EngineTile solidInlet(Direction side) {
+        if (!rearInlet(side)) return null;
+        var master = master();
+        return master != null && master.solidInput != null ? master : null;
+    }
+    IItemHandler solidItemInlet(Direction side) {
+        if (!(level instanceof ServerLevel)) return null;
+        var master = solidInlet(side == null ? nozzle().getOpposite() : side);
+        return master == null ? null : master.solidInput.handler;
+    }
+    WorldlyContainer solidContainer() {
+        if (!(level instanceof ServerLevel)) return null;
+        var master = solidInlet(nozzle().getOpposite());
+        return master == null ? null : master.solidInput;
+    }
+    @Override public EngineTile fluidUserAt(BlockPos pos, Direction side) {
+        return worldPosition.equals(pos) ? fluidInlet(side) : null;
     }
     @Override public void onLoad() {
         super.onLoad();
-        // Ducts in an existing save may still have the old, closed side connection cached.
-        refreshPortsOnTick = isMaster() && tanks.length > 1;
+        // A rear section and its master can load in different chunks.
+        refreshPortsOnTick = engine != null && rearSection();
     }
-    void refreshFluidPorts() {
+    void refreshPorts() {
+        refreshPortsOnTick = false;
+        var master = master();
+        if (master == null) return;
+        boolean liquid = master.tanks.length > 0;
+        if (!isMaster()) {
+            refreshOwnPorts(liquid);
+            return;
+        }
+        var axis = nozzle().getAxis();
+        for (var cell : cells) {
+            if (cell.get(axis) == worldPosition.get(axis) && level.hasChunkAt(cell)
+                    && level.getBlockEntity(cell) instanceof EngineTile piece && piece.master() == this) {
+                piece.refreshOwnPorts(liquid);
+            }
+        }
+    }
+    private void refreshOwnPorts(boolean liquid) {
         refreshPortsOnTick = false;
         level.invalidateCapabilities(worldPosition);
+        if (!liquid) return;
         for (Direction side : Direction.values()) {
             if (inlet(side)) com.hbm.blocks.network.BlockFluidDuct.portChanged(level, worldPosition.relative(side));
         }
     }
     @Override public boolean isLoaded() { return level != null && !isRemoved(); }
     @Override public boolean canConnect(FluidType fluid, ForgeDirection side) {
-        return side != null && inlet(side.toDirection()) && Arrays.stream(tanks).anyMatch(t -> t.joins(fluid));
+        var master = side == null ? null : fluidInlet(side.toDirection());
+        if (master == null) return false;
+        if (fluid == null) return true;
+        for (var tank : master.tanks) if (tank.joins(fluid)) return true;
+        return false;
     }
-    @Override public boolean exposesFluidContact(FluidType f, ForgeDirection d, boolean output) { return !output && canConnect(f,d); }
+    @Override public boolean exposesFluidContact(FluidType fluid, ForgeDirection side, boolean receiving) {
+        return receiving && canConnect(fluid,side);
+    }
     @Override public FluidTankNTM[] getAllTanks() { return tanks; }
     @Override public FluidTankNTM[] getReceivingTanks() { return tanks; }
     @Override public long transferFluid(FluidType fluid, int pressure, long amount) {
@@ -91,6 +158,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     @Override public int getTankCapacity(int i) { return tanks[i].getMaxFill(); }
     @Override public boolean isFluidValid(int i, FluidStack stack) { return !stack.isEmpty() && tanks[i].accepts(stack.getFluid()); }
     @Override public int fill(FluidStack stack, FluidAction action) {
+        if (isRemoved()) return 0;
         for (int i=0; i<tanks.length; i++) if (isFluidValid(i,stack)) {
             int accepted = Math.min(stack.getAmount(),CAPACITY-tanks[i].getFill());
             if (action.execute()) { tanks[i].setFill(tanks[i].getFill()+accepted); setChanged(); }
@@ -100,11 +168,40 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     }
     @Override public FluidStack drain(FluidStack f, FluidAction a) { return FluidStack.EMPTY; }
     @Override public FluidStack drain(int amount, FluidAction a) { return FluidStack.EMPTY; }
-    boolean loadSolid() {
-        if (engine == null || !"SOLID".equals(engine.fuel()) || !offset.equals(BlockPos.ZERO) || solid > CAPACITY-1000) return false;
-        solid += 1000;
+    private final class SolidInput extends SimpleContainer implements WorldlyContainer {
+        private final IItemHandler handler = new InvWrapper(this) {
+            @Override public ItemStack extractItem(int slot, int amount, boolean simulate) { return ItemStack.EMPTY; }
+        };
+        SolidInput() { super(1); }
+        private boolean active() { return solidInput == this && level instanceof ServerLevel && !isRemoved(); }
+        @Override public boolean canPlaceItem(int slot, ItemStack stack) {
+            return slot == 0 && active() && SolidPropellants.units(stack) > 0;
+        }
+        @Override public int[] getSlotsForFace(Direction side) {
+            return rearInlet(side) && active() ? SOLID_SLOTS : NO_SLOTS;
+        }
+        @Override public boolean canPlaceItemThroughFace(int slot, ItemStack stack, Direction side) {
+            return rearInlet(side) && canPlaceItem(slot, stack);
+        }
+        @Override public boolean canTakeItemThroughFace(int slot, ItemStack stack, Direction side) { return false; }
+        @Override public void setChanged() { EngineTile.this.setChanged(); }
+    }
+    int solidFuel() { return solid; }
+    int acceptSolid(int units) {
+        if (!(level instanceof ServerLevel) || solidInput == null || isRemoved() || units <= 0) return 0;
+        int accepted = Math.min(units, CAPACITY - solid);
+        if (accepted == 0) return 0;
+        solid += accepted;
         setChanged();
-        return true;
+        return accepted;
+    }
+    boolean loadSolid(ItemStack stack) {
+        int units = SolidPropellants.units(stack);
+        return units > 0 && units <= CAPACITY - solid && acceptSolid(units) == units;
+    }
+    private void loadSolidInput() {
+        if (solidInput == null) return;
+        if (loadSolid(solidInput.getItem(0))) solidInput.removeItem(0, 1);
     }
     void dismantle(boolean drop) {
         if (level == null || engine == null) return;
@@ -113,13 +210,20 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
                 master.dismantle(drop);
             return;
         }
-        if (drop) Block.popResource(level,worldPosition,new ItemStack(engine.item()));
+        if (drop) {
+            Block.popResource(level,worldPosition,new ItemStack(engine.item()));
+            if (solidInput != null) {
+                var input = solidInput.removeItemNoUpdate(0);
+                Block.popResource(level, worldPosition, input);
+            }
+        }
         for (var cell : cells) if (level.getBlockEntity(cell) instanceof EngineTile piece
                 && cell.offset(piece.offset).equals(worldPosition)) level.removeBlock(cell,false);
     }
     void tick() {
         if (level == null || level.isClientSide) return;
-        if (refreshPortsOnTick) refreshFluidPorts();
+        if (refreshPortsOnTick) refreshPorts();
+        loadSolidInput();
         boolean active=burn();
         if(burning!=active && !isRemoved()) {
             burning=active;
@@ -138,21 +242,24 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
             if (cells.stream().anyMatch(p -> level.hasChunkAt(p) && !(level.getBlockEntity(p) instanceof EngineTile))) { dismantle(true); return false; }
         }
         if (OrbitSpaces.unoccupied(level) || !offset.equals(BlockPos.ZERO) || cells.stream().noneMatch(level::hasNeighborSignal)) return false;
-        int rate = Math.max(1,(int)Math.ceil(engine.getThrust() / (20.0 * 9.81 * Math.max(1,engine.getISP()))));
         if (tanks.length == 0) {
-            if (!"SOLID".equals(engine.fuel()) || solid < rate) return false;
-            solid -= rate;
+            if (!"SOLID".equals(engine.fuel()) || solid < SOLID_BURN_PER_TICK) return false;
+            solid -= SOLID_BURN_PER_TICK;
         } else {
+            int rate = LIQUID_BURN_MULTIPLIER * Math.max(1,
+                (int)Math.ceil(engine.getThrust() / (20.0 * 9.81 * Math.max(1, engine.getISP()))));
             for (var tank : tanks) if (tank.getFill() < rate) return false;
             for (var tank : tanks) tank.setFill(tank.getFill()-rate);
         }
         setChanged();
         var ship=Sable.HELPER.getContaining(level,worldPosition);
+        double impulse = engine.getThrust() * PHYSICAL_THRUST_SCALE / 20.0;
         if (ship instanceof ServerSubLevel sub) {
             var handle = RigidBodyHandle.of(sub);
             if (handle != null && handle.isValid()) handle.applyImpulseAtPoint(bounds().getCenter(),
-                Vec3.atLowerCornerOf(nozzle().getOpposite().getNormal()).scale(engine.getThrust()*PHYSICAL_THRUST_SCALE/20.0));
+                Vec3.atLowerCornerOf(nozzle().getOpposite().getNormal()).scale(impulse));
         }
+        ExhaustBlast.apply(server, this, ship, impulse);
         return true;
     }
     @Override protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
@@ -160,6 +267,9 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         if (engine != null) tag.putString("engine",engine.id());
         tag.putLong("offset",offset.asLong());
         tag.putInt("solid",solid);
+        if (solidInput != null && !solidInput.getItem(0).isEmpty()) {
+            tag.put("solidInput", solidInput.getItem(0).save(provider));
+        }
         for (int i=0;i<tanks.length;i++) tag.putInt("tank"+i,tanks[i].getFill());
     }
     @Override protected void loadAdditional(CompoundTag tag, HolderLookup.Provider provider) {
@@ -167,6 +277,10 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         burning=tag.getBoolean("burning");
         initialize(RocketParts.get(tag.getString("engine")),BlockPos.of(tag.getLong("offset")));
         solid = Math.clamp(tag.getInt("solid"),0,CAPACITY);
+        if (solidInput != null) {
+            var input = ItemStack.parseOptional(provider, tag.getCompound("solidInput"));
+            solidInput.setItem(0, SolidPropellants.units(input) > 0 ? input : ItemStack.EMPTY);
+        }
         for (int i=0;i<tanks.length;i++) tanks[i].setFill(Math.clamp(tag.getInt("tank"+i),0,CAPACITY));
     }
 }

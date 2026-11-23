@@ -31,7 +31,8 @@ final class BoardingClient {
         var player = mc.player;
         player.moveTo(feet.x,feet.y,feet.z,player.getYRot(),player.getXRot());
         player.setDeltaMovement(target.onDeck() ? new Vec3(0,-0.04,0) : Vec3.ZERO);
-        ((dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension)player).sable$setTrackingSubLevel(null);
+        ((dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension)player)
+            .sable$setTrackingSubLevel(GravityFrame.resolve(player).deck() == deck ? deck : null);
         DeckFrame.board(player,deck);
         PacketDistributor.sendToServer(new Boarding.Ready(target.ticket()));
         target = null;

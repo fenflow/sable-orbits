@@ -24,11 +24,18 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
         imageWidth = 360;
         imageHeight = 224;
     }
+    @SubscribeEvent public static void setup(net.neoforged.fml.event.lifecycle.FMLClientSetupEvent event) {
+        event.enqueueWork(RocketPlacementOutline::init);
+    }
     @SubscribeEvent public static void engines(net.neoforged.neoforge.client.event.EntityRenderersEvent.RegisterRenderers e) {
         e.registerBlockEntityRenderer(Engines.TILE.get(),ctx -> new EngineRenderer());
+        e.registerBlockEntityRenderer(Fuselages.TILE.get(), ctx -> new FuselageRenderer());
+        e.registerBlockEntityRenderer(Fuselages.SOLID_TILE.get(), ctx -> new FuselageRenderer());
     }
     @SubscribeEvent public static void register(RegisterMenuScreensEvent e) {
         e.register(ConsoleMenus.TYPE.get(),ConsoleScreen::new);
+        e.register(FuselageMenu.TYPE.get(), FuselageScreen::new);
+        e.register(SolidFuselageMenu.TYPE.get(), SolidFuselageScreen::new);
     }
     @Override protected void init() { super.init(); previous = List.of(); rebuild(); }
     @Override protected void containerTick() { rebuild(); }

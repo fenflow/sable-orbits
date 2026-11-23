@@ -4,7 +4,7 @@ plugins {
 }
 if (providers.gradleProperty('flightWorld').isPresent()) layout.buildDirectory = file('build/flightTest')
 group = 'space.sableorbit'
-version = '0.2.2-alpha'
+version = '0.2.3-alpha'
 base.archivesName = 'sable-orbits'
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 neoForge {
@@ -48,6 +48,7 @@ if (providers.gradleProperty('flightWorld').isPresent()) {
         systemProperty 'sableorbits.powerOnly', providers.gradleProperty('powerOnly').isPresent().toString()
         if (providers.gradleProperty('networkHost').isPresent()) systemProperty 'sableorbits.networkHost', 'true'
         programArguments.addAll('--quickPlaySingleplayer', world)
+        if (world.startsWith('SableFlightTest-StationThrusters')) programArguments.addAll('--width', '1600', '--height', '900')
     }
     if (providers.gradleProperty('networkHost').isPresent()) neoForge.runs {
         peerClient {
@@ -57,7 +58,7 @@ if (providers.gradleProperty('flightWorld').isPresent()) {
             programArguments.addAll('--username','OrbitPilot','--quickPlayMultiplayer','127.0.0.1:25471')
         }
     }
-    tasks.jar { exclude 'space/sableorbit/AttitudeCheck*.class', 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/InertialCheck*.class', 'space/sableorbit/LaunchCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class' }
+    tasks.jar { exclude 'space/sableorbit/AttitudeCheck*.class', 'space/sableorbit/EvaCheck*.class', 'space/sableorbit/InertialCheck*.class', 'space/sableorbit/LaunchCheck*.class', 'space/sableorbit/ArchiveCheck*.class', 'space/sableorbit/LiveFlight*.class', 'space/sableorbit/PoweredFlightCheck*.class', 'space/sableorbit/StationThrusterCheck*.class' }
 }
 
 

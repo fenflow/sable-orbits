@@ -1,0 +1,9 @@
+{
+  "selector": "sableorbits:rocket_fuselage",
+  "properties": { "sable:mass": 1.0 },
+  "overrides": {
+    "mass_class=1": { "sable:mass": 2.5 },
+    "mass_class=2": { "sable:mass": 4.0 },
+    "mass_class=3": { "sable:mass": 16.0 }
+  }
+}

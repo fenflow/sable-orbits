@@ -52,6 +52,10 @@ final class Stations {
             for (var player : level.players()) {
                 Boarding.follow(player);
                 Spacewalk.tick(player);
+                // The hull pose and the airborne player's accepted trajectory now
+                // describe the same tick. Sampling before this can put a jumper
+                // below the floor of a rising cabin for a single gravity check.
+                GravityFrame.update(player);
             }
         }
         if (level.dimension().equals(Orbit.ORBIT)) Hooks.migrateLoaded(level);

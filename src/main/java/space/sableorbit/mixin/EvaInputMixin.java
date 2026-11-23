@@ -14,6 +14,7 @@ import space.sableorbit.Attitude;
 @Mixin(LocalPlayer.class)
 abstract class EvaInputMixin {
     @Unique private boolean sableorbits$verticalInput;
+    @Unique private boolean sableorbits$sneakInput;
 
     // The vanilla escape impulse samples an entire world column. A rotated corner
     // grazing the floor must not launch a swimmer horizontally out of a doorway.
@@ -38,13 +39,18 @@ abstract class EvaInputMixin {
         sableorbits$verticalInput = Attitude.free(player);
         if (!sableorbits$verticalInput) return;
         var input = player.input;
-        player.yya = (input.jumping ? 1 : 0) - (input.shiftKeyDown ? 1 : 0);
+        sableorbits$sneakInput = input.shiftKeyDown;
+        player.yya = (input.jumping ? 1 : 0) - (sableorbits$sneakInput ? 1 : 0);
         input.jumping = false;
         input.shiftKeyDown = false;
     }
 
     @Inject(method="aiStep", at=@At("RETURN"))
     private void finishThrust(CallbackInfo ci) {
-        if (sableorbits$verticalInput) ((LocalPlayer)(Object)this).yya = 0;
+        if (!sableorbits$verticalInput) return;
+        var player = (LocalPlayer)(Object)this;
+        player.yya = 0;
+        // Interactions and the normal sneak packet both read this after movement.
+        player.input.shiftKeyDown = sableorbits$sneakInput;
     }
 }

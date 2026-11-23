@@ -15,6 +15,7 @@ public class SableOrbits {
     public SableOrbits(net.neoforged.bus.api.IEventBus bus) {
         ConsoleMenus.MENUS.register(bus);
         Engines.register(bus);
+        Fuselages.register(bus);
         Attitude.register(bus);
         GravityFrame.register(bus);
         LaunchMotion.TYPES.register(bus);
@@ -26,6 +27,8 @@ public class SableOrbits {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.tick.ServerTickEvent.Post e) -> StationLife.tick(e.getServer()));
         NeoForge.EVENT_BUS.addListener(StationCommand::register);
         NeoForge.EVENT_BUS.addListener(Engines::place);
+        NeoForge.EVENT_BUS.addListener(Fuselages::place);
+        NeoForge.EVENT_BUS.addListener(Fuselages::tooltip);
         NeoForge.EVENT_BUS.addListener((ServerStartedEvent e) -> OrbitSpaces.restore(e.getServer()));
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerChangedDimensionEvent e) -> {
             if (e.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {

@@ -3,5 +3,7 @@
   "loader": "neoforge:obj",
   "model": "sableorbits:models/block/reaction_wheel.obj",
   "automatic_culling": false,
-  "textures": {"particle": "minecraft:block/smooth_stone"}
+  "emissive_ambient": false,
+  "flip_v": true,
+  "textures": {"particle": "sableorbits:block/reaction_wheel"}
 }

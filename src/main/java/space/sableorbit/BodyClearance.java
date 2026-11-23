@@ -24,8 +24,15 @@ public final class BodyClearance {
         var level = player.level();
         var dimensions = player.getDimensions(stance);
         var feet = player.position();
-        if (player instanceof ServerPlayer server && server.connection instanceof Connection connection &&
-            connection.sableorbits$acceptedFeet() != null) feet = connection.sableorbits$acceptedFeet();
+        var frame = GravityFrame.resolve(player);
+        if (player instanceof ServerPlayer server) {
+            if (server.connection instanceof Connection connection && connection.sableorbits$acceptedFeet() != null)
+                feet = connection.sableorbits$acceptedFeet();
+            if (frame.artificial()) {
+                var local = Spacewalk.contactFeet(server, frame.deck(), feet);
+                if (local != null) feet = frame.deck().logicalPose().transformPosition(local);
+            }
+        }
         var upright = dimensions.makeBoundingBox(feet).deflate(.001);
         var candidate = BodyBox.at(upright, feet, new Quaternionf(current.rotation()),
             current.pivotHeight() == 0 ? 0 : dimensions.eyeHeight());
@@ -41,7 +48,7 @@ public final class BodyClearance {
         if (border.isInsideCloseToBorder(player, candidate) && (candidate.minX < border.getMinX() ||
             candidate.maxX > border.getMaxX() || candidate.minZ < border.getMinZ() || candidate.maxZ > border.getMaxZ())) return false;
 
-        var support = GravityFrame.resolve(player).deck();
+        var support = frame.deck();
         if (support != null && blockedInPlot(player, support, candidate, body, obstacle, separation)) return false;
         for (var plot : Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(candidate)))
             if (plot != support && blockedInPlot(player, plot, candidate, body, obstacle, separation)) return false;
