@@ -12,6 +12,7 @@ You can also create a space station the vanilla NTM space way, by building a roc
 
 ___
 <img src="gifs/2.gif" width="561" alt="Orbital station rendezvous">
+
 #### When in space, use an orbital station computer to rendezvous with other stations in orbit of the same planet!
 
 Unless the station is public, it will need to accept the rendezvous request for you to meet in space
@@ -26,6 +27,7 @@ ___
 ## Smaller features:
 
 <img src="gifs/ezgif-1d06109cb9b783e3.gif" width="472" alt="Rocket engines and fuselages">
+
 #### You can place NTM engines and fuselages to build your rockets!
 ___
 
