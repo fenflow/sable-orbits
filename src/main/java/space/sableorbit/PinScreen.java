@@ -12,23 +12,26 @@ import org.lwjgl.glfw.GLFW;
 final class PinScreen extends AbstractContainerScreen<PinMenu> {
     private EditBox digits;
     private final boolean setup;
+    private final boolean manage;
 
     PinScreen(PinMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
         setup = title.getString().equals(PinMenu.SETUP);
+        manage = title.getString().equals(PinMenu.MANAGE);
         imageWidth = 290;
-        imageHeight = 114;
+        imageHeight = manage ? 130 : 114;
     }
 
     @Override protected void init() {
         super.init();
-        digits = new EditBox(font, leftPos + (imageWidth-86)/2, topPos + 26, 86, 20, Component.literal("Four-digit PIN"));
+        digits = new EditBox(font, leftPos + (imageWidth-86)/2, topPos + (manage ? 54 : 26), 86, 20, Component.literal("Four-digit PIN"));
+        if (manage) digits.setHint(Component.literal("New PIN"));
         digits.setMaxLength(4);
         digits.setFilter(value -> value.chars().allMatch(c -> c >= '0' && c <= '9'));
         addRenderableWidget(digits);
         setInitialFocus(digits);
-        var submit = addRenderableWidget(Button.builder(Component.literal(setup ? "Set PIN" : "Rendezvous"), b -> submit())
-            .bounds(leftPos + (imageWidth-104)/2, topPos + 85, 104, 20).build());
+        var submit = addRenderableWidget(Button.builder(Component.literal(manage ? "Save PIN" : setup ? "Set PIN" : "Rendezvous"), b -> submit())
+            .bounds(leftPos + (imageWidth-104)/2, topPos + imageHeight-29, 104, 20).build());
         submit.active = false;
         digits.setResponder(value -> submit.active = StationAccess.validPin(value));
     }
@@ -50,6 +53,11 @@ final class PinScreen extends AbstractContainerScreen<PinMenu> {
     @Override protected void renderLabels(GuiGraphics g, int x, int y) {
         g.drawCenteredString(font, title, imageWidth/2, 9, 0xffeef4f6);
         if (setup) g.drawCenteredString(font, "The PIN will be used by other stations to do rendezvous", imageWidth/2, 53, 0xffbacbd6);
+        if (manage) {
+            var current = menu.displayedPin();
+            if (menu.legacyPin()) g.drawCenteredString(font, "Earlier PIN is active. Set a new PIN to view it.", imageWidth/2, 32, 0xffbacbd6);
+            else if (!current.isEmpty()) g.drawCenteredString(font, "Current PIN   " + current, imageWidth/2, 32, 0xffbacbd6);
+        }
         String message = switch (menu.error()) {
             case 1 -> "Enter exactly four digits.";
             case 2 -> "PIN rejected or rendezvous unavailable.";
@@ -57,6 +65,6 @@ final class PinScreen extends AbstractContainerScreen<PinMenu> {
             case 4 -> "Wait a second before trying again.";
             default -> "";
         };
-        g.drawCenteredString(font, message, imageWidth/2, 70, 0xffffbd84);
+        g.drawCenteredString(font, message, imageWidth/2, imageHeight-44, 0xffffbd84);
     }
 }

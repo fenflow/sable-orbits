@@ -12,6 +12,7 @@ import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import java.util.List;
@@ -40,12 +41,18 @@ record RocketPlacement(BlockPos origin, BlockPos contact, Direction facing, List
         Direction facing = face;
         BlockPos contact = context.getClickedPos();
         BlockPos origin = contact;
-        if (part.type() == PartType.THRUSTER && use.isSecondaryUseActive()) {
+        if (part.type() == PartType.THRUSTER && !use.isSecondaryUseActive()) {
             facing = face.getOpposite();
             origin = Engines.reversedInlet(part, contact, face);
         }
         var cells = Engines.cells(part, origin, facing);
-        return new RocketPlacement(origin, contact, facing, cells, canPlace(context, use.getClickedPos(), cells));
+        boolean valid = canPlace(context, use.getClickedPos(), cells);
+        if (valid && (Fuselages.isLiquidFuselage(part) || Fuselages.isSolidFuselage(part))) {
+            // The ordered corners enclose the complete solid rectangular footprint.
+            var bounds = new AABB(cells.getFirst()).minmax(new AABB(cells.getLast()));
+            valid = BodyClearance.fuselageFits(use.getLevel(), Sable.HELPER.getContaining(use.getLevel(), contact), bounds);
+        }
+        return new RocketPlacement(origin, contact, facing, cells, valid);
     }
 
     static RocketPlacement wheel(ReactionWheelBlock block, UseOnContext use) {

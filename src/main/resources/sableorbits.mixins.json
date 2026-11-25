@@ -9,7 +9,7 @@
     "CabinGravityMixin", "DecompressionMixin", "ExhaustClipMixin", "VentRoomBoundsMixin", "AttitudeMovementMixin",
     "BodyGeometryMixin", "BodyCollisionMixin", "DeckTravelMixin", "DeckMoveControlMixin", "DeckNavigationMixin", "DeckPathBoundsMixin", "DeckBoatMixin", "SeatDismountMixin",
     "OrbitEntityMixin", "ServerAccess", "OrbitLevelLookupMixin", "ParkingUnloadsMixin", "VoidTerrainMixin", "StationAddressMixin", "EvaFrictionMixin", "EvaPlayerMixin", "EvaPacketMixin",
-    "PlayerDropMixin", "FlightVelocityMixin", "FlightRollbackTravelMixin", "FlightRollbackJoinMixin", "FlightRollbackMountMixin", "TransferChunkAccess",
+    "SnowballOriginMixin", "PlayerDropMixin", "FlightVelocityMixin", "FlightRollbackTravelMixin", "FlightRollbackJoinMixin", "FlightRollbackMountMixin", "TransferChunkAccess",
     "LaunchMixin", "ShotMixin", "OrbitalItemGravityMixin", "ItemMotionMixin",
     "VacuumDragMixin", "FireballMotionMixin", "FireworkMotionMixin", "FishingGravityMixin",
     "SednaMotionMixin", "LegacyBulletMixin", "BouncyGravityMixin", "ThrownGravityMixin", "TrackingMixin",

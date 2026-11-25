@@ -9,7 +9,11 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import javax.crypto.Mac;
+import javax.crypto.Cipher;
+import javax.crypto.AEADBadTagException;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -48,10 +52,54 @@ final class StationAccess {
 
     static boolean setPin(MinecraftServer server, CompoundTag access, UUID actor, String pin) {
         if (!validPin(pin) || !access.hasUUID("owner") || !access.getUUID("owner").equals(actor) || configured(access)) return false;
-        var salt = UUID.randomUUID();
-        access.putUUID("salt", salt);
-        access.putByteArray("proof", proof(server, salt, pin));
+        writePin(server, access, pin);
         return true;
+    }
+
+    static boolean changePin(MinecraftServer server, CompoundTag access, UUID actor, UUID displayedSalt, String pin) {
+        if (!validPin(pin) || !canManage(access, actor) || !access.getUUID("salt").equals(displayedSalt)) return false;
+        writePin(server, access, pin);
+        return true;
+    }
+
+    static boolean canManage(CompoundTag access, UUID actor) {
+        return configured(access) && access.hasUUID("owner") && access.getUUID("owner").equals(actor);
+    }
+
+    private static Cipher ownerCipher(MinecraftServer server, UUID salt, int mode) throws GeneralSecurityException {
+        var mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(OrbitSpaces.data(server).pinKey(), "HmacSHA256"));
+        var key = mac.doFinal("sableorbits:owner-pin:v1".getBytes(StandardCharsets.US_ASCII));
+        var nonce = ByteBuffer.allocate(12).putLong(salt.getMostSignificantBits()).putInt((int)salt.getLeastSignificantBits()).array();
+        var cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(mode, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+        return cipher;
+    }
+
+    private static void writePin(MinecraftServer server, CompoundTag access, String pin) {
+        var salt = UUID.randomUUID();
+        var verification = proof(server, salt, pin);
+        sealPin(server, access, salt, pin);
+        access.putUUID("salt", salt);
+        access.putByteArray("proof", verification);
+    }
+
+    private static void sealPin(MinecraftServer server, CompoundTag access, UUID salt, String pin) {
+        try {
+            access.putByteArray("ownerPin", ownerCipher(server, salt, Cipher.ENCRYPT_MODE).doFinal(pin.getBytes(StandardCharsets.US_ASCII)));
+        } catch (GeneralSecurityException e) { throw new IllegalStateException(e); }
+    }
+
+    static String ownerPin(MinecraftServer server, CompoundTag access, UUID actor) {
+        if (!canManage(access, actor)) return "";
+        var sealed = access.getByteArray("ownerPin");
+        if (sealed.length != 20) return "";
+        try {
+            var digits = ownerCipher(server, access.getUUID("salt"), Cipher.DECRYPT_MODE).doFinal(sealed);
+            return new String(digits, StandardCharsets.US_ASCII);
+        } catch (AEADBadTagException e) {
+            return "";
+        } catch (GeneralSecurityException e) { throw new IllegalStateException(e); }
     }
 
     static void adoptComputer(ServerSubLevel root, List<ServerSubLevel> parts) {
@@ -81,6 +129,14 @@ final class StationAccess {
         var access = tag.getCompound(KEY);
         return validPin(pin) && configured(access) && MessageDigest.isEqual(access.getByteArray("proof"),
             proof(server, access.getUUID("salt"), pin));
+    }
+
+    static boolean verifyVisitPin(MinecraftServer server, CompoundTag tag, String pin) {
+        if (!matches(server, tag, pin)) return false;
+        var access = tag.getCompound(KEY);
+        // Proof-only saves can acquire the owner display once a visitor supplies the correct PIN.
+        if (!access.contains("ownerPin")) sealPin(server, access, access.getUUID("salt"), pin);
+        return true;
     }
 
     // Before first ascent, assembly can combine several computers and plots. The oldest claim wins.

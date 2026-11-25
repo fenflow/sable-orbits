@@ -47,6 +47,7 @@ public final class Hooks {
             PinMenu.open(player, computer, root, null);
             return true;
         }
+        if (player.isShiftKeyDown() && PinMenu.manage(player, computer)) return true;
         if (root == null) return false;
         player.openMenu(new SimpleMenuProvider((id, inv, p) -> new Console(id, player, root, computer), Component.literal("Orbital station computer")));
         return true;

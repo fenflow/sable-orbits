@@ -2,6 +2,8 @@
 
 This mod **DOES NOT** add realistic orbital physics.
 
+Install `sable-orbits-0.2.3-alpha.jar` on both the client and the server. The tested versions are Minecraft 1.21.1, NeoForge 21.1.265, NTM Space 1.0.2, HBM Continuum 1.0.5, Sable 2.0.6 and Golem Core 1.0.5.
+
 ## Features:
 
 <img src="gifs/3.gif" width="551" alt="Station ascent into orbit">
@@ -15,7 +17,9 @@ ___
 
 #### When in space, use an orbital station computer to rendezvous with other stations in orbit of the same planet!
 
-Unless the station is public, it will need to accept the rendezvous request for you to meet in space
+For a station claimed by a computer, enter its four-digit PIN to rendezvous. The owner and station team can join directly. Stations that have never had a computer are open to visitors.
+
+Owners can open **PIN** on the station computer to view or change the code. Before launch or after landing, use Shift + right-click on the computer with an empty hand. Changing the PIN takes effect immediately. On older saves, the existing code becomes visible after a visitor uses it successfully. The owner can also set a replacement immediately.
 
 ___
 <img src="gifs/4.gif" width="564" alt="Interplanetary station travel">
@@ -29,6 +33,8 @@ ___
 <img src="gifs/ezgif-1d06109cb9b783e3.gif" width="472" alt="Rocket engines and fuselages">
 
 #### You can place NTM engines and fuselages to build your rockets!
+
+Right-click to point the nozzle toward the block you clicked. Hold Shift while placing to point it out from that face. Clear the entire fuselage footprint of mobs before placing it.
 ___
 
 <img src="gifs/ezgif-13ab97f80690c752.gif" width="468" alt="Stacked reaction wheels">
@@ -43,8 +49,6 @@ AI was used substantially in the code. All assets and descriptions are entirely 
 The mod is supported, if you find a bug or want to suggest a feature, feel free to visit github
 
 ### Planned features:
-
-PIN codes for space station rendezvous instead of request system
 
 Ponder scenes/AEguide entries for some of the features
 

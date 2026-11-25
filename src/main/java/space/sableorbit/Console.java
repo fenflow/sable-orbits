@@ -48,6 +48,8 @@ final class Console extends ChestMenu {
         button(1, Items.SPYGLASS, "Stations around " + station.orbiting.name, () -> { tab = 1; page = 0; });
         button(2, Items.CHAIN, "Connected stations", () -> { tab = 2; page = 0; });
         button(3, Items.PLAYER_HEAD, "Team", () -> { tab = 3; page = 0; });
+        if (StationAccess.canManage(Stations.info(root).getCompound(StationAccess.KEY), pilot.getUUID()))
+            button(4, Items.TRIPWIRE_HOOK, PinMenu.MANAGE, () -> PinMenu.manage(pilot, computer));
         if (tab == 3) { team(); return; }
         if (tab == 0) {
             getContainer().setItem(DRIVE, computer.getItem(0).copy());

@@ -19,10 +19,13 @@ import java.util.UUID;
 
 final class PinMenu extends AbstractContainerMenu {
     static final String SETUP = "Set a PIN code";
+    static final String MANAGE = "Manage station PIN";
     private final TileEntityOrbitalStationComputer computer;
     private final ServerSubLevel source, destination;
     private final UUID owner;
     private final DataSlot error = DataSlot.standalone();
+    private final DataSlot displayedPin = DataSlot.standalone();
+    private UUID editingSalt;
     private boolean saved;
     private static final java.util.Map<ServerPlayer, Long> retryAfter = new java.util.WeakHashMap<>();
 
@@ -33,11 +36,28 @@ final class PinMenu extends AbstractContainerMenu {
         this.destination = destination;
         this.owner = owner;
         addDataSlot(error);
+        addDataSlot(displayedPin);
     }
 
     static void open(ServerPlayer player, TileEntityOrbitalStationComputer computer, ServerSubLevel source, ServerSubLevel destination) {
         player.openMenu(new SimpleMenuProvider((id, inv, p) -> new PinMenu(id, computer, source, destination, player.getUUID()),
             Component.literal(destination == null ? SETUP : "Enter rendezvous PIN")));
+    }
+
+    static boolean manage(ServerPlayer player, TileEntityOrbitalStationComputer computer) {
+        if (!inRange(player, computer)) return false;
+        var location = StationAccess.locate(computer);
+        var access = location.tag().getCompound(StationAccess.KEY);
+        var actor = player.getUUID();
+        if (!StationAccess.canManage(access, actor)) return false;
+        player.openMenu(new SimpleMenuProvider((id, inv, p) -> {
+            var menu = new PinMenu(id, computer, location.root(), null, actor);
+            menu.editingSalt = access.getUUID("salt");
+            var pin = StationAccess.ownerPin(player.getServer(), access, actor);
+            menu.displayedPin.set(StationAccess.validPin(pin) ? Integer.parseInt(pin) + 1 : -1);
+            return menu;
+        }, Component.literal(MANAGE)));
+        return true;
     }
 
     static boolean inRange(Player player, TileEntityOrbitalStationComputer computer) {
@@ -47,8 +67,13 @@ final class PinMenu extends AbstractContainerMenu {
 
     @Override public boolean stillValid(Player player) {
         if (computer == null) return true;
-        return player.getUUID().equals(owner) && inRange(player, computer)
-            && (source == null || !source.isRemoved() && StationAccess.locate(computer).root() == source);
+        if (!player.getUUID().equals(owner) || !inRange(player, computer) || source != null && source.isRemoved()) return false;
+        // Unlaunched groups can span many plots. Submission resolves their current claim again.
+        if (source == null) return true;
+        var location = StationAccess.locate(computer);
+        if (location.root() != source) return false;
+        var access = location.tag().getCompound(StationAccess.KEY);
+        return editingSalt == null || StationAccess.canManage(access, owner) && editingSalt.equals(access.getUUID("salt"));
     }
 
     boolean controls(ServerPlayer pilot, ServerSubLevel station) {
@@ -56,6 +81,10 @@ final class PinMenu extends AbstractContainerMenu {
     }
 
     int error() { return error.get(); }
+    boolean legacyPin() { return displayedPin.get() < 0; }
+    String displayedPin() {
+        return displayedPin.get() <= 0 ? "" : String.format(java.util.Locale.ROOT, "%04d", displayedPin.get() - 1);
+    }
 
     void submit(ServerPlayer player, String pin) {
         if (player.containerMenu != this || !stillValid(player)) { player.closeContainer(); return; }
@@ -74,19 +103,26 @@ final class PinMenu extends AbstractContainerMenu {
         }
         var location = StationAccess.locate(computer);
         var access = location.tag().getCompound(StationAccess.KEY);
-        if (source != location.root() || !StationAccess.setPin(player.getServer(), access, owner, pin)) { error.set(3); return; }
+        if (source != location.root()) { error.set(3); return; }
+        boolean changed = editingSalt == null ? StationAccess.setPin(player.getServer(), access, owner, pin)
+            : StationAccess.changePin(player.getServer(), access, owner, editingSalt, pin);
+        if (!changed) { error.set(3); return; }
         saved = true;
         computer.setChanged();
         if (source != null) {
             location.tag().remove("decay");
             Rendezvous.saveRoot(source);
-            Hooks.computer(player, computer.getBlockPos());
-        } else player.closeContainer();
+        }
+        if (editingSalt != null) {
+            player.closeContainer();
+            player.displayClientMessage(Component.literal("Station PIN changed."), true);
+        } else if (source != null) Hooks.computer(player, computer.getBlockPos());
+        else player.closeContainer();
     }
 
     @Override public void removed(Player player) {
         super.removed(player);
-        if (saved || destination != null || computer == null || !(player instanceof ServerPlayer pilot)) return;
+        if (saved || editingSalt != null || destination != null || computer == null || !(player instanceof ServerPlayer pilot)) return;
         if (source != null && !source.isRemoved() && !StationAccess.configured(Stations.info(source).getCompound(StationAccess.KEY)))
             Stations.warnDecay(pilot, Stations.info(source), true);
         else if (source == null)
@@ -104,7 +140,8 @@ final class PinMenu extends AbstractContainerMenu {
             buf -> new Submit(buf.readVarInt(), buf.readUtf(4)));
         public Type<Submit> type() { return TYPE; }
         static void register(RegisterPayloadHandlersEvent event) {
-            event.registrar("1").playToServer(TYPE, CODEC, (value, ctx) -> {
+            // The owner screen adds a synchronized menu slot that earlier clients cannot read.
+            event.registrar("2").playToServer(TYPE, CODEC, (value, ctx) -> {
                 if (ctx.player() instanceof ServerPlayer p && p.containerMenu instanceof PinMenu menu && menu.containerId == value.menu)
                     menu.submit(p, value.pin);
             });

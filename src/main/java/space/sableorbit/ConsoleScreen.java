@@ -62,6 +62,7 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
         button(1,68,17,75,"Stations");
         button(2,145,17,92,"Rendezvous");
         button(3,239,17,65,"Team");
+        if (!label(4).isEmpty()) button(4,306,17,46,"PIN");
         if (flight) {
             button(19,122,43,106,"Write station disk");
             button(20,122,64,106,"Land at disk");

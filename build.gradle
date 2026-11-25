@@ -4,7 +4,7 @@ plugins {
 }
 if (providers.gradleProperty('flightWorld').isPresent()) layout.buildDirectory = file('build/flightTest')
 group = 'space.sableorbit'
-version = '0.2.3-alpha'
+version = '0.2.5-beta'
 base.archivesName = 'sable-orbits'
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 neoForge {

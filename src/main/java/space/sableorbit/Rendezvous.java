@@ -54,7 +54,7 @@ final class Rendezvous {
             var parts = Flight.group(host, false, topology);
             if (parts.stream().anyMatch(part -> topology.equipment(part).computer())) StationAccess.adoptComputer(host, parts);
         }
-        if (!StationAccess.admits(target, player.getUUID()) && !StationAccess.matches(host.getLevel().getServer(), target, pin)) return false;
+        if (!StationAccess.admits(target, player.getUUID()) && !StationAccess.verifyVisitPin(host.getLevel().getServer(), target, pin)) return false;
         return join(guest, host, !target.contains(StationAccess.KEY));
     }
     static AABB bounds(ServerSubLevel root) {
