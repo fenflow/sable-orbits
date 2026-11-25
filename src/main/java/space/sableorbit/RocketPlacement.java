@@ -8,11 +8,31 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import java.util.List;
 
 record RocketPlacement(BlockPos origin, BlockPos contact, Direction facing, List<BlockPos> cells, boolean placeable) {
+    // Sable rotates block states and positions but copies the original section offset NBT.
+    static final EnumProperty<Rotation> FOOTPRINT_ROTATION = EnumProperty.create("footprint_rotation", Rotation.class);
+
+    static BlockState rotate(BlockState state, Rotation turn) {
+        return state.setValue(BlockStateProperties.FACING, turn.rotate(state.getValue(BlockStateProperties.FACING)))
+            .setValue(FOOTPRINT_ROTATION, state.getValue(FOOTPRINT_ROTATION).getRotated(turn));
+    }
+
+    static org.joml.Quaternionf modelRotation(BlockState state, Direction mountingFace) {
+        var turn = state.getValue(FOOTPRINT_ROTATION);
+        if (turn == Rotation.NONE) return mountingFace.getRotation();
+        // Preserve the roll around the mounting axis, including the bell layout of an upright engine.
+        var originalFace = turn.rotation().inverse().rotate(mountingFace);
+        return new org.joml.Quaternionf().rotationY((float)(-Math.PI / 2) * turn.rotate(0, 4)).mul(originalFace.getRotation());
+    }
+
     static RocketPlacement of(RocketPart part, UseOnContext use) {
         var context = new BlockPlaceContext(use);
         // Sable's block hit already reports the face in plot coordinates.

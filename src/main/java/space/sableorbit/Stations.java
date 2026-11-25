@@ -35,7 +35,7 @@ final class Stations {
     }
     static OrbitalStation nativeStation(ServerSubLevel part) {
         var data = info(part);
-        return data.hasUUID("root") ? StationData.get(part.getLevel().getServer())
+        return data.hasUUID("root") && !data.contains("detachedBody") ? StationData.get(part.getLevel().getServer())
             .getStationFromPosition(data.getInt("x") * 1024, data.getInt("z") * 1024) : null;
     }
     static List<ServerSubLevel> loaded(ServerLevel level) {
@@ -121,8 +121,11 @@ final class Stations {
             placeholder=null;
         }
         var grid = returning && placeholder == null
-            ? new int[]{old.getInt("x"),old.getInt("z")} : data.findFreeSpace();
-        if (data.getStationFromPosition(grid[0]*1024,grid[1]*1024) != null) return;
+            ? new int[]{old.getInt("x"),old.getInt("z")} : StationLife.freeAddress(data);
+        if (grid == null) {
+            ascentRetry.put(root, origin.getGameTime() + 20);
+            return;
+        }
         var p = root.logicalPose().position();
         var offset = new Vec3(512 - p.x, 128 - p.y, 512 - p.z);
         var moved = OrbitSpaces.transfer(parts, "station_" + root.getUniqueId(), offset);
@@ -136,12 +139,19 @@ final class Stations {
         var tag = new CompoundTag();
         tag.putUUID("root", root.getUniqueId());
         tag.putUUID("owner", old.hasUUID("owner") ? old.getUUID("owner") : crew.getFirst().getUUID());
-        tag.putBoolean("public",old.getBoolean("public"));
+        var access = returning && old.contains(StationAccess.KEY) ? old.getCompound(StationAccess.KEY) : StationAccess.earliest(moved);
+        if (access != null) {
+            tag.put(StationAccess.KEY, access.copy());
+            StationAccess.claim(tag, tag.getUUID("owner"), origin.getGameTime());
+        }
         tag.putInt("x", grid[0]);
         tag.putInt("z", grid[1]);
         tag.putDouble("launchX", p.x);
         tag.putDouble("launchZ", p.z);
-        for (var part : moved) set(part, tag.copy());
+        for (var part : moved) {
+            set(part, tag.copy());
+            StationAccess.clearPreflight(part);
+        }
         data.setDirty();
     }
     static void tickStation(ServerSubLevel root) {
@@ -161,18 +171,34 @@ final class Stations {
         }
         refreshEquipment(station, parts, checks.topology());
         var crew = Flight.crew(parts);
-        if (!tag.hasUUID("owner") && !crew.isEmpty()) tag.putUUID("owner",crew.getFirst().getUUID());
-        if (Rendezvous.linked(tag) || parts.stream().anyMatch(part -> checks.topology().equipment(part).computer())) {
+        if (!tag.hasUUID("owner") && !crew.isEmpty()) {
+            tag.putUUID("owner",crew.getFirst().getUUID());
+            Rendezvous.saveRoot(root);
+        }
+        boolean equipped = parts.stream().anyMatch(part -> checks.topology().equipment(part).computer());
+        if (equipped && (!tag.contains(StationAccess.KEY) || !tag.getCompound(StationAccess.KEY).hasUUID("owner") && tag.hasUUID("owner")))
+            StationAccess.adoptComputer(root, parts);
+        if (equipped && StationAccess.configured(tag.getCompound(StationAccess.KEY))) {
             tag.remove("decay");
-        } else if (!crew.isEmpty()) {
-            int seconds = Math.max(0, 300 - tag.getInt("decay") - 1);
-            tag.putInt("decay", 300 - seconds);
-            String time = "%d:%02d".formatted(seconds / 60, seconds % 60);
-            for (var player : crew) GolemNetwork.sendToPlayer(player, PlayerInformPayload.CODEC,
-                PlayerInformPayload.of(7342, 1200, ChatFormatting.YELLOW, "The station will fall in " + time + " without a station computer..."));
-            if (seconds == 0 && land(root, tag.getDouble("launchX"), tag.getDouble("launchZ"))) checks.invalidateTopology();
+        } else if (!tag.contains("expires")) {
+            int elapsed = Math.min(300, tag.getInt("decay") + 1);
+            tag.putInt("decay", elapsed);
+            for (var player : crew) warnDecay(player, tag, equipped);
+            if (elapsed == 300 && emergencyLand(root)) checks.invalidateTopology();
         }
         if (!root.isRemoved()) Rendezvous.checkDistance(root, checks);
+    }
+
+    static void warnDecay(ServerPlayer player, CompoundTag tag, boolean equipped) {
+        int seconds = Math.max(0, 300 - tag.getInt("decay"));
+        String reason = equipped ? "Computer doesn't have a PIN-code" : "No orbital station computer";
+        String message = "%s, station will fall down in %d:%02d".formatted(reason, seconds / 60, seconds % 60);
+        GolemNetwork.sendToPlayer(player, PlayerInformPayload.CODEC, PlayerInformPayload.of(7342, 1200, ChatFormatting.YELLOW, message));
+    }
+
+    private static boolean emergencyLand(ServerSubLevel root) {
+        var tag = info(root);
+        return land(root, tag.getDouble("launchX"), tag.getDouble("launchZ"), true);
     }
 
     static List<Propulsion> refreshEquipment(OrbitalStation station, List<ServerSubLevel> parts) {
@@ -201,8 +227,15 @@ final class Stations {
         return excludedBurns;
     }
     static boolean land(ServerSubLevel root, double x, double z) {
+        return land(root, x, z, false);
+    }
+
+    private static boolean land(ServerSubLevel root, double x, double z, boolean emergency) {
         var station = nativeStation(root);
-        if (station == null || Rendezvous.linked(info(root)) || station.state != OrbitalStation.StationState.ORBIT || !Orbit.isLandable(station.orbiting)) return false;
+        if (station == null || root.isRemoved() || root(root) != root || (!emergency && Rendezvous.linked(info(root)))
+                || station.state != OrbitalStation.StationState.ORBIT || !Orbit.isLandable(station.orbiting)) return false;
+        var container = SubLevelContainer.getContainer(root.getLevel());
+        if (container.getAllTickets().keySet().stream().anyMatch(id -> container.getSubLevel(id) == null)) return false;
         var target = root.getLevel().getServer().getLevel(Orbit.levelOf(station.orbiting));
         if (target == null) return false;
         var p = root.logicalPose().position();
@@ -210,11 +243,15 @@ final class Stations {
         if (parts.isEmpty()) return false;
         for (var part : parts) {
             var previous = info(part);
-            part.getUserDataTag().put("sableorbits_landed",previous.copy());
+            var landed = previous.copy();
+            for (var field : List.of("host", "guests", "publicVisit", "hostLeave", "guestLeave", "decay")) landed.remove(field);
+            part.getUserDataTag().put("sableorbits_landed",landed);
             part.getUserDataTag().remove("sableorbits");
         }
+        if (emergency) StationLife.repairVisits(root.getLevel());
         StationLife.reserve(target.getServer(),root.getUniqueId(),station);
         StationLife.deregister(StationData.get(target.getServer()),station);
+        StationLife.detachAfterLanding(root,station,parts);
         return true;
     }
     private static final Map<ServerPlayer,OrbitalStation> lastSky = new WeakHashMap<>();

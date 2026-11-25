@@ -18,10 +18,13 @@ public class SableOrbits {
         Fuselages.register(bus);
         Attitude.register(bus);
         GravityFrame.register(bus);
+        LegacyCrew.register();
         LaunchMotion.TYPES.register(bus);
         bus.addListener(FlightVelocity::register);
         bus.addListener(Boarding::register);
         bus.addListener(EvaMove::register);
+        bus.addListener(PinMenu.Submit::register);
+        NeoForge.EVENT_BUS.addListener(StationAccess::placed);
         Stations.initialize();
         NeoForge.EVENT_BUS.addListener(Attitude::tick);
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.tick.ServerTickEvent.Post e) -> {
@@ -37,6 +40,8 @@ public class SableOrbits {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerChangedDimensionEvent e) -> {
             if (e.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
                 Stations.forgetSky(player);
+                LegacyCrew.forget(player);
+                Boarding.forget(player);
                 Spacewalk.forget(player);
                 Attitude.reset(player);
                 var previous = player.serverLevel().getServer().getLevel(e.getFrom());

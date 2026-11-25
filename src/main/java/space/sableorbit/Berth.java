@@ -37,7 +37,6 @@ public final class Berth {
         if(arriving) {
             gap=Math.max(0,tag.getFloat("sableorbits_gap")-.1f);
             if(!tag.contains("sableorbits_gap")) gap=12;
-            if(dock.getDocked()!=null && dock.getDocked()!=r) gap=Math.max(gap,8);
             if(gap==0) {
                 r.setState(r.isReusable()?EntityRideableRocket.RocketState.NEEDSFUEL:EntityRideableRocket.RocketState.LANDED);
                 dock.dockRocket(r);
@@ -58,13 +57,17 @@ public final class Berth {
         data.remove("sableorbits_gap");
         data.remove("sableorbits_port");
         data.remove("sableorbits_berth");
+        data.remove("sableorbits_departure");
         rocket.getEntityData().set(PORT, BlockPos.ZERO);
         rocket.getEntityData().set(GAP, 0f);
         rocket.setDeltaMovement(Vec3.ZERO);
-        rocket.setState(rocket.isReusable() ? EntityRideableRocket.RocketState.NEEDSFUEL : EntityRideableRocket.RocketState.LANDED);
+        boolean inOrbit = com.ntmspace.orbit.Orbit.inOrbit(rocket.level());
+        if (inOrbit) rocket.setState(rocket.isReusable() ? EntityRideableRocket.RocketState.NEEDSFUEL : EntityRideableRocket.RocketState.LANDED);
+        else rocket.setState(EntityRideableRocket.RocketState.LANDING);
         if (rocket.getFirstPassenger() instanceof net.minecraft.server.level.ServerPlayer player) {
             player.displayClientMessage(net.minecraft.network.chat.Component.literal(
-                "The receiving orbital dock is unavailable. The rocket has stopped its approach."), false);
+                inOrbit ? "The receiving orbital dock is unavailable. The rocket has stopped its approach."
+                    : "The receiving orbital dock is unavailable. The capsule is returning to the surface."), false);
         }
     }
 }

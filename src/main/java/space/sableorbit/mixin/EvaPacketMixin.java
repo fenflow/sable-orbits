@@ -19,6 +19,7 @@ abstract class EvaPacketMixin implements EvaMove.Connection, space.sableorbit.Bo
     @Shadow private Vec3 awaitingPositionFromClient;
     @Unique private final EvaMove.Recovery sableorbits$recovery = new EvaMove.Recovery();
     @Unique private Vec3 sableorbits$acceptedFeet;
+    @Unique private boolean sableorbits$resendingTeleport;
 
     public Vec3 sableorbits$acceptedFeet() { return sableorbits$acceptedFeet; }
 
@@ -55,8 +56,20 @@ abstract class EvaPacketMixin implements EvaMove.Connection, space.sableorbit.Bo
     private void forgetDeparture(double x, double y, double z, float yaw, float pitch,
             java.util.Set<net.minecraft.world.entity.RelativeMovement> relative, CallbackInfo ci) {
         if (Spacewalk.rotationOnly(relative, x-player.getX(), y-player.getY(), z-player.getZ())) return;
+        if (!sableorbits$resendingTeleport && (x != player.getX() || y != player.getY() || z != player.getZ()))
+            space.sableorbit.Boarding.cancelForTeleport(player);
         sableorbits$recovery.teleported(player.tickCount);
         Spacewalk.forget(player);
+    }
+
+    // A retransmission still describes the original teleport even if the deck has since moved.
+    @com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method="updateAwaitingTeleport", at=@At(value="INVOKE",
+        target="Lnet/minecraft/server/network/ServerGamePacketListenerImpl;teleport(DDDFF)V"))
+    private void retryTeleport(ServerGamePacketListenerImpl connection, double x, double y, double z, float yaw, float pitch,
+                              com.llamalad7.mixinextras.injector.wrapoperation.Operation<Void> send) {
+        sableorbits$resendingTeleport = true;
+        try { send.call(connection, x, y, z, yaw, pitch); }
+        finally { sableorbits$resendingTeleport = false; }
     }
 
     @Inject(method="handleMovePlayer",at=@At("RETURN"))

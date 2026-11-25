@@ -17,6 +17,6 @@ abstract class LaunchPadMixin {
         var disk = NavDrives.destination(pad.getItem(TileEntityLaunchPadRocket.SLOT_DRIVE));
         if (disk == null || !disk.isOrbit()) return;
         var station = StationData.get(level.getServer()).getStationFromPosition(disk.x()*1024,disk.z()*1024);
-        if (station == null || station.getPort() == null || station.getPort().isRemoved()) cir.setReturnValue(false);
+        if (Docking.receivingPort(station) == null) cir.setReturnValue(false);
     }
 }

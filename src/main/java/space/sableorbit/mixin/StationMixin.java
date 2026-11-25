@@ -86,7 +86,7 @@ abstract class StationMixin implements OrbitSunlight.EclipseClock {
     }
     @Inject(method="spawn", at=@At("HEAD"), cancellable=true)
     private static void existing(ServerLevel level,int x,int z,CallbackInfo ci) {
-        if (Docking.addressed(level.getServer(),x,z) != null) ci.cancel();
+        if (Docking.addressed(level.getServer(),x,z) != null || Hooks.waitForLegacySpawn(level,x,z)) ci.cancel();
     }
     @Inject(method="spawn", at=@At("RETURN"))
     private static void assemble(ServerLevel level, int x, int z, CallbackInfo ci) { Hooks.regular(level,x,z); }

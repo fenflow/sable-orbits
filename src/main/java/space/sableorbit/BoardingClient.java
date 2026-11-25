@@ -15,14 +15,22 @@ final class BoardingClient {
     private static Boarding.Target target;
     private static int ticks;
     static void receive(Boarding.Target request) { target = request; ticks = 0; }
+    static void cancel(java.util.UUID ticket) {
+        if (target != null && target.ticket().equals(ticket)) target = null;
+    }
 
     @SubscribeEvent static void logout(ClientPlayerNetworkEvent.LoggingOut event) { target = null; DeckFrame.clear(); }
+
+    @SubscribeEvent static void unload(net.neoforged.neoforge.event.level.LevelEvent.Unload event) {
+        if (event.getLevel() instanceof net.minecraft.client.multiplayer.ClientLevel level
+                && target != null && target.level() == level.dimension()) target = null;
+    }
 
     @SubscribeEvent static void tick(ClientTickEvent.Post event) {
         var mc = Minecraft.getInstance();
         DeckFrame.rememberRide(mc.player);
         if (target == null) return;
-        if (++ticks > 200) { target = null; return; }
+        if (++ticks >= 200 || mc.player != null && mc.player.isPassenger()) { target = null; return; }
         if (mc.level == null || mc.player == null || mc.level.dimension() != target.level()) return;
         var container = SubLevelContainer.getContainer(mc.level);
         var deck = container == null ? null : container.getSubLevel(target.hull());

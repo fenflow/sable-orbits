@@ -21,6 +21,6 @@ abstract class StationAddressMixin {
                 result.setReturnValue(new int[]{x,z});return;
             }
         }
-        throw new IllegalStateException("All station addresses are occupied");
+        throw new StationLife.AddressSpaceFull();
     }
 }

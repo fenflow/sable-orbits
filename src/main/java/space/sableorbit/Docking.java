@@ -11,6 +11,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.level.ChunkPos;
+import space.sableorbit.mixin.EquipmentAccess;
 
 import java.util.Collections;
 import java.util.Set;
@@ -106,8 +107,27 @@ public final class Docking {
     }
 
     public static TileEntityOrbitalStation receivingPort(OrbitalStation station) {
-        var port = station == null ? null : station.getPort();
-        return port == null || port.isRemoved() ? null : port;
+        if (station == null) return null;
+        var nativePort = station.getPort();
+        if (nativePort == null) return null;
+        // Ordinary NTM ports can stow the previous craft; leave that selection to NTM.
+        if (nativePort.getLevel() != null && !OrbitSpaces.isolated(nativePort.getLevel()))
+            return nativePort.isRemoved() ? null : nativePort;
+        // A moving berth must be unreserved and empty even before NTM next updates hasDocked.
+        for (var port : ((EquipmentAccess)(Object)station).sableorbits$ports().values()) {
+            if (port.isRemoved() || port.isReserved || port.hasDocked || port.getDocked() != null) continue;
+            var level = port.getLevel();
+            if (level != null && level.hasChunkAt(port.getBlockPos()) && level.getBlockEntity(port.getBlockPos()) == port) return port;
+        }
+        return null;
+    }
+    public static void rememberDestination(EntityRideableRocket rocket, TileEntityOrbitalStation dock) {
+        var level = dock.getLevel();
+        if (level != null && OrbitSpaces.isolated(level)
+                && Sable.HELPER.getContaining(level, dock.getBlockPos()) instanceof ServerSubLevel plot) {
+            var root = Stations.root(plot);
+            if (root != null) rocket.getPersistentData().putUUID("sableorbits_dock", root.getUniqueId());
+        }
     }
     public static boolean redirect(Entity passenger,double x,double z) {
         var server = passenger.getServer();
@@ -115,7 +135,10 @@ public final class Docking {
         var station = addressed(server,(int)Math.floor(x),(int)Math.floor(z));
         if (station == null) return false;
         var dock = receivingPort(Stations.nativeStation(station));
-        if (dock == null) return true;
+        if (dock == null) {
+            if (passenger.getRootVehicle() instanceof EntityRideableRocket rocket) Berth.abortApproach(rocket);
+            return true;
+        }
         var pos = Sable.HELPER.projectOutOfSubLevel(station.getLevel(),dock.getBlockPos().getCenter().add(0,-12,0));
         var vehicle = passenger.getRootVehicle();
         vehicle.getPersistentData().remove("sableorbits_gap");

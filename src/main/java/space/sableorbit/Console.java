@@ -31,8 +31,7 @@ final class Console extends ChestMenu {
         refresh();
     }
     @Override public boolean stillValid(Player player) {
-        return !root.isRemoved() && player.level() == root.getLevel() && !computer.isRemoved()
-            && Sable.HELPER.distanceSquaredWithSubLevels(player.level(), player.position(), computer.getBlockPos().getCenter()) < 64;
+        return player == pilot && !root.isRemoved() && PinMenu.inRange(player, computer) && StationAccess.locate(computer).root() == root;
     }
     private void button(int slot, Item icon, String label, Runnable action) {
         var stack = new ItemStack(icon);
@@ -47,7 +46,9 @@ final class Console extends ChestMenu {
         if (station == null) return;
         button(0, Items.COMPASS, "Flight · " + station.orbiting.name, () -> { tab = 0; page = 0; });
         button(1, Items.SPYGLASS, "Stations around " + station.orbiting.name, () -> { tab = 1; page = 0; });
-        button(2, Items.CHAIN, "Rendezvous requests and connected stations", () -> { tab = 2; page = 0; });
+        button(2, Items.CHAIN, "Connected stations", () -> { tab = 2; page = 0; });
+        button(3, Items.PLAYER_HEAD, "Team", () -> { tab = 3; page = 0; });
+        if (tab == 3) { team(); return; }
         if (tab == 0) {
             getContainer().setItem(DRIVE, computer.getItem(0).copy());
             button(9, Items.PAPER, "Insert navigation disk in the next slot →", () -> {});
@@ -57,9 +58,6 @@ final class Console extends ChestMenu {
             return;
         }
         var tag = Stations.info(root);
-        button(8, Items.REDSTONE_TORCH, tag.getBoolean("public") ? "Public · make private" : "Private · make public", () -> {
-            if (Rendezvous.owner(pilot, root)) tag.putBoolean("public", !tag.getBoolean("public"));
-        });
         var list = Rendezvous.stations(pilot.getServer()).stream().filter(s -> s != root)
             .filter(s -> {
                 var target = Stations.nativeStation(s);
@@ -78,11 +76,17 @@ final class Console extends ChestMenu {
                     button(slot, Items.GRAY_DYE, name + " · unavailable", () -> {});
                     continue;
                 }
-                boolean sent = Stations.info(other).getCompound("requests").contains(root.getUniqueId().toString());
-                button(slot, Items.ENDER_PEARL, name + (sent ? " · request sent" : " · rendezvous"), () -> result(Rendezvous.request(pilot,root,other)));
-            } else if (tag.getCompound("requests").contains(other.getUniqueId().toString()) && Rendezvous.available(other,root)) {
-                button(slot, Items.LIME_DYE, name + " · accept rendezvous", () -> result(Rendezvous.decide(pilot,root,other,true)));
-                button(slot+1, Items.RED_DYE, name + " · deny", () -> result(Rendezvous.decide(pilot,root,other,false)));
+                boolean direct = StationAccess.admits(Stations.info(other), pilot.getUUID());
+                if (!direct && !StationAccess.configured(Stations.info(other).getCompound(StationAccess.KEY))) {
+                    button(slot, Items.GRAY_DYE, name + " · Awaiting PIN setup", () -> {});
+                    continue;
+                }
+                button(slot, Items.ENDER_PEARL, name + (direct ? " · Rendezvous" : " · Enter PIN"), () -> {
+                    if (StationAccess.admits(Stations.info(other), pilot.getUUID())) result(Rendezvous.request(pilot, root, other));
+                    else if (Rendezvous.available(root, other) && StationAccess.configured(Stations.info(other).getCompound(StationAccess.KEY)))
+                        PinMenu.open(pilot, computer, root, other);
+                    else pilot.displayClientMessage(Component.literal("This station has no PIN yet."), false);
+                });
             } else {
                 boolean guest = tag.hasUUID("host");
                 var visit = guest ? tag : Stations.info(other);
@@ -92,14 +96,45 @@ final class Console extends ChestMenu {
                     () -> result(Rendezvous.leave(pilot,root,other)));
             }
         }
+        pages(list.size());
+    }
+    private void team() {
+        var access = Stations.info(root).getCompound(StationAccess.KEY);
+        var members = access.getCompound("team");
+        record Row(String name, String action, Runnable select) {}
+        var rows = new ArrayList<Row>();
+        if (access.hasUUID("owner")) {
+            var owner = pilot.getServer().getProfileCache().get(access.getUUID("owner"));
+            rows.add(new Row(owner.map(com.mojang.authlib.GameProfile::getName).orElse("Station owner"), "Owner", () -> {}));
+        }
+        var invited = access.getCompound("invited");
+        if (invited.contains(pilot.getUUID().toString())) {
+            rows.add(new Row("Team invitation", "Accept", () -> result(StationAccess.answer(pilot, root, true))));
+            rows.add(new Row("Team invitation", "Decline", () -> result(StationAccess.answer(pilot, root, false))));
+        }
+        for (var id : members.getAllKeys()) rows.add(new Row(members.getString(id), "Member", () -> {}));
+        if (Rendezvous.owner(pilot, root)) for (var candidate : Flight.crew(Flight.group(root))) {
+            if (StationAccess.admits(Stations.info(root), candidate.getUUID())) continue;
+            String name = candidate.getGameProfile().getName();
+            if (invited.contains(candidate.getUUID().toString())) rows.add(new Row(name, "Invited", () -> {}));
+            else rows.add(new Row(name, "Invite", () -> result(StationAccess.invite(pilot, root, candidate))));
+        }
+        rows.sort(Comparator.comparing(Row::name));
+        page = Math.clamp(page, 0, Math.max(0, (rows.size()-1)/5));
+        for (int i = page*5; i < Math.min(rows.size(), page*5+5); i++) {
+            var row = rows.get(i);
+            button(9+(i%5)*3, Items.PLAYER_HEAD, row.name + " · " + row.action, row.select);
+        }
+        pages(rows.size());
+    }
+    private void pages(int count) {
         if (page > 0) button(45, Items.ARROW, "Previous page", () -> page--);
-        if ((page+1)*5 < list.size()) button(53, Items.ARROW, "Next page", () -> page++);
+        if ((page+1)*5 < count) button(53, Items.ARROW, "Next page", () -> page++);
     }
     private boolean related(ServerSubLevel other) {
         var tag = Stations.info(root);
         String id = other.getUniqueId().toString();
-        return tag.getCompound("guests").contains(id) || (tag.hasUUID("host") && tag.getUUID("host").equals(other.getUniqueId()))
-            || (tag.getCompound("requests").contains(id) && Rendezvous.available(other,root));
+        return tag.getCompound("guests").contains(id) || (tag.hasUUID("host") && tag.getUUID("host").equals(other.getUniqueId()));
     }
     boolean controls(Set<ServerSubLevel> parts) { return parts.contains(root) && stillValid(pilot); }
     private void result(boolean ok) {

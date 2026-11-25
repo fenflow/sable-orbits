@@ -122,7 +122,7 @@ final class EngineEffects {
         var deck = emission.deck;
         var part = tile.engine();
         var bells = EnginePlume.bells(part);
-        var facing = tile.nozzle().getOpposite().getRotation();
+        var facing = tile.modelRotation();
         var localAxis = Vec3.atLowerCornerOf(tile.nozzle().getNormal());
         var axis = deck == null ? localAxis : deck.logicalPose().transformNormal(localAxis);
         int outlets = Math.min(atmosphere ? perEngine : Math.min(perEngine, 2), bells.size());
@@ -174,7 +174,7 @@ final class EngineEffects {
         var color = EnginePlume.fuel(part).flame;
         // The block renderer already includes the hull and nozzle rotations. Express the
         // camera billboard in engine axes so a rolling hull cannot roll the flare.
-        var billboard = tile.nozzle().getOpposite().getRotation().conjugate();
+        var billboard = tile.modelRotation().conjugate();
         if (hullPose != null) billboard.mul(new Quaternionf(hullPose.orientation()).conjugate());
         var localCamera = new CameraInfo(camera.pos, camera.yRot, billboard.mul(camera.orientation));
         var sink = new RecordingSubmitSink();

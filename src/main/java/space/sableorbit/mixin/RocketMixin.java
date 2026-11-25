@@ -74,24 +74,52 @@ abstract class RocketMixin {
                 destinationOverride = null;
                 sableorbits$missingDockTicks = 0;
             }
-        }
+        } else if (r.getState() == EntityRideableRocket.RocketState.DOCKING && !Orbit.inOrbit(r.level())) {
+            // Older saves may still be waiting on the planet. Allow an already queued native teleport to finish first.
+            if (++sableorbits$missingDockTicks >= 60) {
+                Berth.abortApproach(r);
+                destinationOverride = null;
+                sableorbits$missingDockTicks = 0;
+            }
+        } else sableorbits$missingDockTicks = 0;
         BerthBox.tick(r);
+    }
+    @Inject(method="beginLandingSequence",at=@At(value="INVOKE",target="Lcom/ntmspace/entity/rocket/EntityRideableRocket;canRide()Z"),cancellable=true)
+    private void validateArrival(RocketTarget from, RocketTarget to, CallbackInfo ci) {
+        var rocket = (EntityRideableRocket)(Object)this;
+        var server = rocket.getServer();
+        if (server == null || !rocket.canRide()) return;
+        var disk = rocket.getDestination();
+        if (disk == null || disk.body != DriveBody.ORBIT) return;
+        // Keep native stage separation for touchdown. A finless spent stage would tip and explode on impact.
+        // Stop before NTM enters DOCKING and asks the teleporter to change dimensions.
+        var root = Docking.addressed(server, disk.x * 1024, disk.z * 1024);
+        var target = rocket.getPersistentData();
+        if (root == null && !target.hasUUID("sableorbits_dock")) return;
+        if (root != null && (!target.hasUUID("sableorbits_dock") || root.getUniqueId().equals(target.getUUID("sableorbits_dock")))
+                && Docking.receivingPort(StationData.get(server).getStationFromPosition(disk.x * 1024, disk.z * 1024)) != null) return;
+        Berth.abortApproach(rocket);
+        destinationOverride = null;
+        ci.cancel();
     }
     @Inject(method="attemptLaunch",at=@At("HEAD"),cancellable=true)
     private void requireDock(CallbackInfo ci) {
         var rocket = (EntityRideableRocket)(Object)this;
-        if (rocket.getServer() != null && OrbitSpaces.isolated(rocket.level()))
+        if (rocket.getServer() == null) return;
+        rocket.getPersistentData().remove("sableorbits_dock");
+        if (OrbitSpaces.isolated(rocket.level()))
             rocket.getPersistentData().putDouble("sableorbits_departure",rocket.getY()-96);
         var disk = rocket.getDestination();
-        if (rocket.getServer() == null || disk == null || disk.body != DriveBody.ORBIT) return;
+        if (disk == null || disk.body != DriveBody.ORBIT) return;
         var struct = rocket.getRocket();
         if (struct != null && struct.capsule != null && RocketParts.STATION_CORE.equals(struct.capsule.id())) return;
         var station = StationData.get(rocket.getServer()).getStationFromPosition(disk.x*1024,disk.z*1024);
-        if (Docking.receivingPort(station) == null) {
+        var dock = Docking.receivingPort(station);
+        if (dock == null) {
             if (rocket.getFirstPassenger() instanceof net.minecraft.server.level.ServerPlayer p)
                 p.displayClientMessage(net.minecraft.network.chat.Component.literal("The receiving station needs an available orbital dock."),false);
             ci.cancel();
-        }
+        } else Docking.rememberDestination(rocket, dock);
     }
     @Redirect(method="recallPod",at=@At(value="INVOKE",target="Lcom/ntmspace/entity/rocket/EntityRideableRocket;attemptLaunch()V"))
     private void recallFromMovingPort(EntityRideableRocket rocket) {
@@ -124,7 +152,7 @@ abstract class RocketMixin {
     @Redirect(method="tick",at=@At(value="INVOKE",target="Lcom/ntmspace/orbit/OrbitalStation;getPort(Lnet/minecraft/world/level/Level;II)Lcom/ntmspace/tileentity/station/TileEntityOrbitalStation;"))
     private TileEntityOrbitalStation resolve(Level level,int x,int z) {
         var rocket = (EntityRideableRocket)(Object)this;
-        if (OrbitSpaces.isolated(level)) return null;
+        if (OrbitSpaces.isolated(level) || rocket.getState() == EntityRideableRocket.RocketState.DOCKING && !Orbit.inOrbit(level)) return null;
         return OrbitalStation.getPort(level,x,z);
     }
 }

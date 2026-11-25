@@ -22,9 +22,11 @@ final class EngineBlock extends Block implements EntityBlock, WorldlyContainerHo
     static final IntegerProperty SKIN = IntegerProperty.create("section",0,2);
     EngineBlock() {
         super(Properties.of().strength(1.5F, 5).sound(SoundType.METAL).noOcclusion());
-        registerDefaultState(defaultBlockState().setValue(FACING,Direction.DOWN).setValue(SKIN,0));
+        registerDefaultState(defaultBlockState().setValue(FACING,Direction.DOWN).setValue(SKIN,0)
+            .setValue(RocketPlacement.FOOTPRINT_ROTATION, Rotation.NONE));
     }
-    @Override protected void createBlockStateDefinition(StateDefinition.Builder<Block,BlockState> b) { b.add(FACING,SKIN); }
+    @Override protected void createBlockStateDefinition(StateDefinition.Builder<Block,BlockState> b) { b.add(FACING,SKIN,RocketPlacement.FOOTPRINT_ROTATION); }
+    @Override protected BlockState rotate(BlockState state, Rotation rotation) { return RocketPlacement.rotate(state, rotation); }
     @Override protected RenderShape getRenderShape(BlockState state) { return RenderShape.ENTITYBLOCK_ANIMATED; }
     @Override public BlockEntity newBlockEntity(BlockPos pos, BlockState state) { return new EngineTile(pos,state); }
     @Override public WorldlyContainer getContainer(BlockState state, LevelAccessor level, BlockPos pos) {

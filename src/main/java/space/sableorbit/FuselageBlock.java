@@ -19,6 +19,7 @@ import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
@@ -43,12 +44,14 @@ final class FuselageBlock extends dev.golem.core.world.CompatBlock implements En
     FuselageBlock() {
         super(Properties.of().strength(1.5F, 5).sound(SoundType.METAL).noOcclusion().noLootTable().pushReaction(PushReaction.BLOCK));
         registerDefaultState(defaultBlockState().setValue(FACING, Direction.UP).setValue(SOLID, false)
-            .setValue(MASTER, true).setValue(MASS_CLASS, 0));
+            .setValue(MASTER, true).setValue(MASS_CLASS, 0).setValue(RocketPlacement.FOOTPRINT_ROTATION, Rotation.NONE));
     }
 
     @Override protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(FACING, SOLID, MASTER, MASS_CLASS);
+        builder.add(FACING, SOLID, MASTER, MASS_CLASS, RocketPlacement.FOOTPRINT_ROTATION);
     }
+
+    @Override protected BlockState rotate(BlockState state, Rotation rotation) { return RocketPlacement.rotate(state, rotation); }
 
     @Override protected RenderShape getRenderShape(BlockState state) {
         return RenderShape.ENTITYBLOCK_ANIMATED;

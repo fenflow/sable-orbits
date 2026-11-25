@@ -11,6 +11,8 @@ final class ConsoleMenus {
     static final DeferredRegister<MenuType<?>> MENUS = DeferredRegister.create(Registries.MENU,"sableorbits");
     static final Supplier<MenuType<ChestMenu>> TYPE = MENUS.register("station_computer",
         () -> new MenuType<>(ConsoleMenus::clientMenu, FeatureFlags.DEFAULT_FLAGS));
+    static final Supplier<MenuType<PinMenu>> PIN = MENUS.register("station_pin",
+        () -> new MenuType<>((id, inventory) -> new PinMenu(id, null, null, null, null), FeatureFlags.DEFAULT_FLAGS));
     private static ChestMenu clientMenu(int id,net.minecraft.world.entity.player.Inventory inventory) {
         return new ChestMenu(TYPE.get(),id,inventory,new SimpleContainer(54),6);
     }

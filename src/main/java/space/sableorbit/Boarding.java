@@ -35,16 +35,22 @@ public final class Boarding {
         static final StreamCodec<RegistryFriendlyByteBuf,Ready> CODEC = StreamCodec.of((buf,r)->buf.writeUUID(r.ticket),buf->new Ready(buf.readUUID()));
         public Type<Ready> type() { return TYPE; }
     }
+    record Cancel(UUID ticket) implements CustomPacketPayload {
+        static final Type<Cancel> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath("sableorbits","board_cancel"));
+        static final StreamCodec<RegistryFriendlyByteBuf,Cancel> CODEC = StreamCodec.of((buf,c)->buf.writeUUID(c.ticket),buf->new Cancel(buf.readUUID()));
+        public Type<Cancel> type() { return TYPE; }
+    }
     private record Pending(Target target, int expires) {}
     private static final Map<ServerPlayer,Pending> pending = new WeakHashMap<>();
 
     static void register(RegisterPayloadHandlersEvent event) {
         var registrar = event.registrar("1");
         registrar.playToClient(Target.TYPE,Target.CODEC,(target,ctx)->BoardingClient.receive(target));
+        registrar.playToClient(Cancel.TYPE,Cancel.CODEC,(cancel,ctx)->BoardingClient.cancel(cancel.ticket()));
         registrar.playToServer(Ready.TYPE,Ready.CODEC,(ready,ctx)->{
             if (ctx.player() instanceof ServerPlayer player) {
-                var arrival = pending.get(player);
-                if (arrival != null && arrival.target.ticket.equals(ready.ticket) && arrival.target.level == player.level().dimension()) {
+                var arrival = current(player);
+                if (arrival != null && arrival.target.ticket.equals(ready.ticket)) {
                     follow(player);
                     if (pending.remove(player) != null) {
                         var deck = GravityFrame.resolve(player).deck();
@@ -56,10 +62,13 @@ public final class Boarding {
         });
     }
 
-    static void arrive(ServerPlayer player, ServerSubLevel deck, Vec3 feet, boolean onDeck) {
+    static boolean arrive(ServerPlayer player, ServerSubLevel deck, Vec3 feet, boolean onDeck) {
         var level = deck.getLevel();
         player.teleportTo(level,feet.x,feet.y,feet.z,player.getYRot(),player.getXRot());
+        // Dimension travel can be vetoed even though teleportTo returns void.
+        if (player.serverLevel() != level || deck.isRemoved() || player.position().distanceToSqr(feet) > 1e-8) return false;
         followOnLoad(player, deck, feet, onDeck);
+        return true;
     }
 
     static void followOnLoad(ServerPlayer player, ServerSubLevel deck, Vec3 feet, boolean onDeck) {
@@ -73,22 +82,39 @@ public final class Boarding {
         }
     }
 
-    public static boolean pending(ServerPlayer player) { return pending.containsKey(player); }
+    static void forget(ServerPlayer player) { pending.remove(player); }
+
+    public static void cancelForTeleport(ServerPlayer player) {
+        var arrival = pending.remove(player);
+        if (arrival != null && player.connection.hasChannel(Cancel.TYPE))
+            PacketDistributor.sendToPlayer(player, new Cancel(arrival.target.ticket));
+    }
+
+    private static Pending current(ServerPlayer player) {
+        var arrival = pending.get(player);
+        if (arrival != null && (arrival.target.level != player.level().dimension() || player.tickCount >= arrival.expires
+                || player.isPassenger())) {
+            forget(player);
+            return null;
+        }
+        return arrival;
+    }
+
+    public static boolean pending(ServerPlayer player) { return current(player) != null; }
 
     static Vec3 pendingFeet(ServerPlayer player, SubLevel deck) {
-        var arrival = pending.get(player);
-        return arrival != null && arrival.target.level == player.level().dimension() && arrival.target.hull.equals(deck.getUniqueId())
-            ? arrival.target.feet : null;
+        var arrival = current(player);
+        return arrival != null && arrival.target.hull.equals(deck.getUniqueId()) ? arrival.target.feet : null;
     }
 
     static void follow(ServerPlayer player) {
-        var arrival = pending.get(player);
+        var arrival = current(player);
         if (arrival == null) return;
         var target = arrival.target;
         var container = SubLevelContainer.getContainer(player.level());
         var deck = container == null ? null : container.getSubLevel(target.hull);
-        if (player.tickCount >= arrival.expires || player.level().dimension() != target.level || deck == null || player.isPassenger()) {
-            pending.remove(player);
+        if (deck == null || deck.isRemoved()) {
+            forget(player);
             return;
         }
         // Keep the server's chunk tracking and reentry checks at the live boarding point while the plot loads.

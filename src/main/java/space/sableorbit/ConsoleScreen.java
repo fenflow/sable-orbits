@@ -34,6 +34,7 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
         e.registerBlockEntityRenderer(Fuselages.SOLID_TILE.get(), ctx -> new FuselageRenderer());
     }
     @SubscribeEvent public static void register(RegisterMenuScreensEvent e) {
+        e.register(ConsoleMenus.PIN.get(),PinScreen::new);
         e.register(ConsoleMenus.TYPE.get(),ConsoleScreen::new);
         e.register(FuselageMenu.TYPE.get(), FuselageScreen::new);
         e.register(SolidFuselageMenu.TYPE.get(), SolidFuselageScreen::new);
@@ -60,12 +61,12 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
         button(0,8,17,58,"Flight");
         button(1,68,17,75,"Stations");
         button(2,145,17,92,"Rendezvous");
+        button(3,239,17,65,"Team");
         if (flight) {
             button(19,122,43,106,"Write station disk");
             button(20,122,64,106,"Land at disk");
             button(21,122,85,106,"Transfer to planet");
-        } else if (!label(8).isEmpty()) {
-            button(8,239,17,113,label(8));
+        } else {
             for (int i=0;i<5;i++) {
                 int slot = 9+3*i;
                 String label = label(slot);
@@ -73,7 +74,7 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
                 int split = label.lastIndexOf(" · ");
                 rows.add(split < 0 ? label : label.substring(0,split));
                 button(slot,170,36+i*17,125,split < 0 ? "Select" : label.substring(split+3));
-                if (!label(slot+1).isEmpty()) button(slot+1,297,36+i*17,54,"Deny");
+                controls.get(slot).active = !label.endsWith(" · Owner") && !label.endsWith(" · Member") && !label.endsWith(" · Invited") && !menu.getSlot(slot).getItem().is(Items.GRAY_DYE);
             }
             if (!label(45).isEmpty()) button(45,244,125,50,"Back");
             if (!label(53).isEmpty()) button(53,298,125,54,"Next");

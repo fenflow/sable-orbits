@@ -16,21 +16,25 @@ final class Rendezvous {
     static List<ServerSubLevel> stations(MinecraftServer server) {
         var result = new ArrayList<ServerSubLevel>();
         for (var level : server.getAllLevels()) if (OrbitSpaces.isolated(level))
-            for (var part : Stations.loaded(level)) if (Stations.root(part) == part && StationLife.intact(part)) result.add(part);
+            for (var part : Stations.loaded(level))
+                if (Stations.root(part) == part && Stations.nativeStation(part) != null && StationLife.intact(part)) result.add(part);
         return result;
     }
     static boolean linked(CompoundTag tag) { return tag.hasUUID("host") || !tag.getCompound("guests").isEmpty(); }
+    static void saveRoot(ServerSubLevel root) { StationLife.remember(root, Stations.info(root)); }
+    private static boolean current(ServerSubLevel root) { return !root.isRemoved() && Stations.root(root) == root; }
     static boolean owner(ServerPlayer player, ServerSubLevel root) {
         var tag = Stations.info(root);
         return tag.hasUUID("owner") && tag.getUUID("owner").equals(player.getUUID());
     }
     private static boolean operates(ServerPlayer player, ServerSubLevel station) {
-        return owner(player,station) || (player.containerMenu instanceof Console console && console.controls(Set.of(station)));
+        return owner(player,station) || (player.containerMenu instanceof Console console && console.controls(Set.of(station)))
+            || player.containerMenu instanceof PinMenu menu && menu.controls(player, station);
     }
     static boolean available(ServerSubLevel guest, ServerSubLevel host) {
         var a = Stations.nativeStation(guest);
         var b = Stations.nativeStation(host);
-        return guest != host && !linked(Stations.info(guest)) && !Stations.info(host).hasUUID("host")
+        return guest != host && current(guest) && current(host) && !linked(Stations.info(guest)) && !Stations.info(host).hasUUID("host")
             && a != null && b != null && a.orbiting == b.orbiting && a.state == OrbitalStation.StationState.ORBIT && b.state == a.state;
     }
     static CompoundTag entries(CompoundTag tag, String key) {
@@ -38,18 +42,20 @@ final class Rendezvous {
         return tag.getCompound(key);
     }
     static boolean request(ServerPlayer player, ServerSubLevel guest, ServerSubLevel host) {
-        if (!operates(player, guest) || !available(guest, host)) return false;
-        if (Stations.info(host).getBoolean("public")) return join(guest, host, true);
-        entries(Stations.info(host), "requests").putBoolean(guest.getUniqueId().toString(), true);
-        return true;
+        return request(player, guest, host, "");
     }
-    static boolean decide(ServerPlayer player, ServerSubLevel host, ServerSubLevel guest, boolean accept) {
-        var requests = entries(Stations.info(host), "requests");
-        String id = guest.getUniqueId().toString();
-        if (!owner(player, host) || !requests.contains(id)) return false;
-        if (accept && (!available(guest, host) || !join(guest, host, false))) return false;
-        requests.remove(id);
-        return true;
+
+    static boolean request(ServerPlayer player, ServerSubLevel guest, ServerSubLevel host, String pin) {
+        if (!operates(player, guest) || !available(guest, host)) return false;
+        var target = Stations.info(host);
+        // A loaded legacy hull or a newly separated cabin can appear in the directory before its first maintenance tick.
+        if (!target.contains(StationAccess.KEY)) {
+            var topology = new FlightTopology(host.getLevel());
+            var parts = Flight.group(host, false, topology);
+            if (parts.stream().anyMatch(part -> topology.equipment(part).computer())) StationAccess.adoptComputer(host, parts);
+        }
+        if (!StationAccess.admits(target, player.getUUID()) && !StationAccess.matches(host.getLevel().getServer(), target, pin)) return false;
+        return join(guest, host, !target.contains(StationAccess.KEY));
     }
     static AABB bounds(ServerSubLevel root) {
         return bounds(Flight.group(root));
@@ -101,16 +107,17 @@ final class Rendezvous {
                 body.addLinearAndAngularVelocity(new org.joml.Vector3d(hostVelocity).sub(body.getLinearVelocity()),new org.joml.Vector3d());
             }
             var tag = Stations.info(copies.getFirst());
-            for (var station : stations(host.getLevel().getServer())) Stations.info(station).getCompound("requests").remove(guest.getUniqueId().toString());
-            tag.remove("requests");
             tag.putUUID("host", host.getUniqueId());
             tag.putBoolean("publicVisit", publicVisit);
             entries(Stations.info(host), "guests").putBoolean(guest.getUniqueId().toString(), true);
+            saveRoot(copies.getFirst());
+            saveRoot(host);
             return true;
         }
         return false;
     }
     static boolean leave(ServerPlayer player, ServerSubLevel actor, ServerSubLevel other) {
+        if (!current(actor) || !current(other) || actor.getLevel() != other.getLevel()) return false;
         boolean requester = Stations.info(actor).hasUUID("host");
         if (!(requester ? operates(player,actor) : owner(player,actor))) return false;
         var guest = requester ? actor : other;
@@ -118,6 +125,7 @@ final class Rendezvous {
         var tag = Stations.info(guest);
         if (!tag.hasUUID("host") || !host.getUniqueId().equals(tag.getUUID("host"))) return false;
         tag.putBoolean(requester ? "guestLeave" : "hostLeave", true);
+        saveRoot(guest);
         if (tag.getBoolean("guestLeave") && (tag.getBoolean("publicVisit") || tag.getBoolean("hostLeave")))
             return separate(guest, host);
         return true;
@@ -237,6 +245,8 @@ final class Rendezvous {
         var tag = Stations.info(copies.getFirst());
         for (String key : List.of("host","hostLeave","guestLeave","publicVisit")) tag.remove(key);
         entries(Stations.info(host), "guests").remove(guest.getUniqueId().toString());
+        saveRoot(copies.getFirst());
+        saveRoot(host);
         return true;
     }
 }

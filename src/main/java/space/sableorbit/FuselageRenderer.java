@@ -31,7 +31,7 @@ final class FuselageRenderer implements BlockEntityRenderer<FuselageTile> {
 
         pose.pushPose();
         pose.translate(center.x, center.y, center.z);
-        pose.mulPose(tile.getBlockState().getValue(FuselageBlock.FACING).getRotation());
+        pose.mulPose(RocketPlacement.modelRotation(tile.getBlockState(), tile.getBlockState().getValue(FuselageBlock.FACING)));
         models.render(part, width, height, pose, buffers, tile.getLevel(), light, overlay);
         pose.popPose();
     }

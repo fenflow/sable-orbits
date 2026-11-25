@@ -25,16 +25,29 @@ public final class Hooks {
     public static OrbitalStation lookup(MinecraftServer server, int x, int z) {
         if (server == null) return null;
         for (var level : server.getAllLevels()) {
-            if (!OrbitSpaces.isolated(level)) continue;
+            if (!OrbitSpaces.isolated(level) && !level.dimension().equals(Orbit.ORBIT)) continue;
             var part = Sable.HELPER.getContaining(level, new BlockPos(x,0,z));
             if (part instanceof ServerSubLevel s) return Stations.nativeStation(s);
         }
         return null;
     }
     public static boolean computer(ServerPlayer player, BlockPos pos) {
-        if (!(Sable.HELPER.getContaining(player.level(), pos) instanceof ServerSubLevel part)) return false;
-        var root = Stations.root(part);
-        if (root == null || !(player.level().getBlockEntity(pos) instanceof TileEntityOrbitalStationComputer computer)) return false;
+        if (!(player.level().getBlockEntity(pos) instanceof TileEntityOrbitalStationComputer computer)
+                || !PinMenu.inRange(player, computer)) return false;
+        var location = StationAccess.locate(computer);
+        var root = location.root();
+        var tag = location.tag();
+        if (root == null && !tag.contains(StationAccess.KEY)) return false;
+        var placement = StationAccess.placement(computer);
+        if (!tag.getCompound(StationAccess.KEY).hasUUID("owner") && placement.hasUUID("owner")) tag.put(StationAccess.KEY, placement.copy());
+        UUID founder = tag.hasUUID("owner") ? tag.getUUID("owner") : player.getUUID();
+        var access = StationAccess.claim(tag, founder, player.getServer().overworld().getGameTime());
+        if (!StationAccess.configured(access) && player.getUUID().equals(access.getUUID("owner"))) {
+            if (root != null) Rendezvous.saveRoot(root);
+            PinMenu.open(player, computer, root, null);
+            return true;
+        }
+        if (root == null) return false;
         player.openMenu(new SimpleMenuProvider((id, inv, p) -> new Console(id, player, root, computer), Component.literal("Orbital station computer")));
         return true;
     }
@@ -74,29 +87,128 @@ public final class Hooks {
         BlockMultiblockCore.withoutTeardown(() -> {
             var part = SubLevelAssemblyHelper.assembleBlocks(level, pos, cells, BoundingBox3i.from(cells));
             if (part == null) return;
-            var p = part.logicalPose().position();
-            var copies = OrbitSpaces.transfer(List.of(part), "station_" + part.getUniqueId(),
-                new Vec3(512-p.x,128-p.y,512-p.z), standing);
-            var active = copies.isEmpty() ? part : copies.getFirst();
             var tag = new net.minecraft.nbt.CompoundTag();
             tag.putUUID("root", part.getUniqueId());
             tag.putInt("x", station.dX);
             tag.putInt("z", station.dZ);
             if (!standing.isEmpty()) tag.putUUID("owner",standing.getFirst().getUUID());
-            Stations.set(active,tag);
+            var access = StationAccess.earliest(List.of(part));
+            if (access != null) {
+                tag.put(StationAccess.KEY, access.copy());
+                tag.putUUID("owner", access.getUUID("owner"));
+            }
+            StationAccess.clearPreflight(part);
+            // Save the disk identity on the assembled source before any passenger can veto travel.
+            Stations.set(part,tag);
             station.hasStation = true;
             StationData.get(level.getServer()).setDirty();
+            transferLegacy(part, station, standing);
         });
     }
-    private static final java.util.Map<ServerLevel,Set<BlockPos>> legacy = new WeakHashMap<>();
+    private static final Map<ServerLevel,Set<BlockPos>> legacy = new WeakHashMap<>();
+    private static final Map<ServerSubLevel,Long> retryMigrationAfter = new WeakHashMap<>();
+    private static final Map<ServerLevel,Set<OrbitalStation>> oldNativeDisks = new WeakHashMap<>();
+    private static final TicketType<ChunkPos> LEGACY_ARRIVAL =
+        TicketType.create("sableorbits_legacy_arrival", Comparator.comparingLong(p -> p.toLong()), 160);
+
+    static void watchNativeMigrations(ServerLevel level) {
+        if (level == null || !level.dimension().equals(Orbit.ORBIT) || oldNativeDisks.containsKey(level)) return;
+        var container = SubLevelContainer.getContainer(level);
+        if (container == null) return;
+        Set<OrbitalStation> candidates = Collections.newSetFromMap(new WeakHashMap<>());
+        oldNativeDisks.put(level, candidates);
+        if (!container.getOccupancy().isEmpty()) {
+            var addresses = OrbitSpaces.data(level.getServer()).addresses;
+            for (var station : StationData.get(level.getServer()).getStations())
+                if (station.hasStation && !addresses.contains(station.dX + "," + station.dZ))
+                    candidates.add(station);
+        }
+        container.addObserver(new dev.ryanhcode.sable.api.sublevel.SubLevelObserver() {
+            @Override public void onSubLevelRemoved(dev.ryanhcode.sable.sublevel.SubLevel removed,
+                    dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason reason) {
+                if (reason != dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason.REMOVED
+                        || !(removed instanceof ServerSubLevel part)) return;
+                var info = Stations.info(part);
+                if (!info.hasUUID("root") || !info.getUUID("root").equals(part.getUniqueId())) return;
+                int x = info.getInt("x"), z = info.getInt("z");
+                candidates.remove(StationData.get(level.getServer()).getStationFromPosition(x*1024,z*1024));
+                // Sable's ticket observer already clears every ticket on REMOVED and retains them on UNLOADED.
+                retryMigrationAfter.remove(part);
+            }
+        });
+    }
+
+    static boolean unresolvedNativeDisk(ServerLevel level, int x, int z) {
+        var candidates = oldNativeDisks.get(level);
+        if (candidates == null || candidates.isEmpty() || !candidates.contains(StationData.get(level.getServer()).getStationFromPosition(x,z))) return false;
+        // Old plots have no migration ticket or global UUID/address index. Their storage
+        // pointer names a physical holding chunk, which can be far from the original core.
+        var container = SubLevelContainer.getContainer(level);
+        return container != null && container.getOccupancy().cardinality() > container.getLoadedCount();
+    }
+
+    public static boolean waitForLegacySpawn(ServerLevel level, int x, int z) {
+        if (pendingMigration(level,x,z)) return true;
+        if (!unresolvedNativeDisk(level,x,z)) return false;
+        var chunk = new ChunkPos(new BlockPos(OrbitalStation.gridOf(x)*1024+512,127,OrbitalStation.gridOf(z)*1024+512));
+        level.getChunkSource().addRegionTicket(LEGACY_ARRIVAL, chunk, 3, chunk);
+        return true;
+    }
+
+    private static String migrationTicket(int gridX, int gridZ) {
+        return "migration/" + gridX + "/" + gridZ;
+    }
+
+    public static boolean pendingMigration(ServerLevel level, int worldX, int worldZ) {
+        if (!level.dimension().equals(Orbit.ORBIT)) return false;
+        var container = SubLevelContainer.getContainer(level);
+        if (container == null) return false;
+        int gridX = OrbitalStation.gridOf(worldX), gridZ = OrbitalStation.gridOf(worldZ);
+        String key = migrationTicket(gridX, gridZ);
+        for (var entry : container.getAllTickets().values()) {
+            for (var ticket : entry.tickets())
+                if (ticket.type() == Stations.TICKET && key.equals(ticket.key())) return true;
+        }
+        // Older stalled conversions have the root tag but predate the source loading ticket.
+        for (var part : container.getAllSubLevels()) {
+            var info = Stations.info(part);
+            if (!part.isRemoved() && info.hasUUID("root") && part.getUniqueId().equals(info.getUUID("root"))
+                    && info.getInt("x") == gridX && info.getInt("z") == gridZ) return true;
+        }
+        return false;
+    }
+
+    private static void transferLegacy(ServerSubLevel part, OrbitalStation station, List<ServerPlayer> standing) {
+        var source = part.getLevel();
+        watchNativeMigrations(source);
+        var p = part.logicalPose().position();
+        var moved = OrbitSpaces.transfer(List.of(part), "station_" + part.getUniqueId(),
+            new Vec3(512-p.x,128-p.y,512-p.z), standing);
+        if (moved.isEmpty()) {
+            var aboard = new LinkedHashSet<>(standing);
+            aboard.addAll(Flight.crew(List.of(part)));
+            for (var player : aboard) LegacyCrew.remember(player, part, station);
+            SubLevelContainer.getContainer(source).addForceLoadTicket(part, Stations.TICKET, migrationTicket(station.dX, station.dZ));
+            // Retry a transient refusal promptly. Sustained vetoes get a longer interval.
+            retryMigrationAfter.put(part, source.getGameTime() + (retryMigrationAfter.containsKey(part) ? 200 : 20));
+        }
+    }
     public static void queueLegacy(ServerLevel level,BlockPos pos) {
         if (level.dimension().equals(Orbit.ORBIT) && level.getBlockState(pos).is(StationBlocks.ORBITAL_STATION.get())
                 && !Sable.HELPER.isInPlotGrid(level,pos)) legacy.computeIfAbsent(level,k -> new LinkedHashSet<>()).add(pos.immutable());
     }
     static void migrateLoaded(ServerLevel level) {
         var positions = legacy.remove(level);
-        if (positions == null) return;
-        for (var pos : positions) regular(level,pos.getX(),pos.getZ());
+        if (positions != null) for (var pos : positions) regular(level,pos.getX(),pos.getZ());
+        if (level.getGameTime() % 20 != 0) return;
+        for (var part : Stations.loaded(level)) {
+            if (part.isRemoved() || Stations.root(part) != part || retryMigrationAfter.getOrDefault(part, 0L) > level.getGameTime()) continue;
+            var station = Stations.nativeStation(part);
+            if (station == null || !station.hasStation || StationLife.reserved(level.getServer(), station.dX, station.dZ)
+                    || Docking.addressed(level.getServer(), station.dX*1024, station.dZ*1024) != null) continue;
+            BlockMultiblockCore.withoutTeardown(() -> transferLegacy(part, station, List.of()));
+        }
+        LegacyCrew.retry(level);
     }
     public static boolean travelLocked(MinecraftServer server, OrbitalStation station) {
         return Rendezvous.stations(server).stream().anyMatch(s -> Stations.nativeStation(s) == station && Rendezvous.linked(Stations.info(s)));

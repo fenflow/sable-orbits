@@ -46,7 +46,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         engine = part;
         offset = toCore;
         if (part != null && offset.equals(BlockPos.ZERO)) {
-            cells = Engines.cells(part,worldPosition,nozzle());
+            cells = Engines.cells(part,worldPosition,nozzle(), getBlockState().getValue(RocketPlacement.FOOTPRINT_ROTATION));
             tanks = java.util.stream.Stream.of(part.getFuel(),part.getOxidizer())
                 .filter(f -> f != null && f != Fluids.NONE).map(f -> new FluidTankNTM(f,CAPACITY)).toArray(FluidTankNTM[]::new);
             for (var tank : tanks) tank.bindOwner(this);
@@ -76,7 +76,10 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         return net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket.create(this);
     }
     Direction nozzle() { return getBlockState().getValue(EngineBlock.FACING); }
-    private boolean rearSection() { return offset.get(nozzle().getAxis()) == 0; }
+    org.joml.Quaternionf modelRotation() { return RocketPlacement.modelRotation(getBlockState(), nozzle().getOpposite()); }
+    private BlockPos sectionOffset() { return offset.rotate(getBlockState().getValue(RocketPlacement.FOOTPRINT_ROTATION)); }
+    private BlockPos masterPos() { return worldPosition.offset(sectionOffset()); }
+    private boolean rearSection() { return sectionOffset().get(nozzle().getAxis()) == 0; }
     private boolean rearInlet(Direction side) { return side == nozzle().getOpposite() && rearSection(); }
     boolean inlet(Direction side) {
         if (side == null || engine == null) return false;
@@ -85,7 +88,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     private EngineTile master() {
         if (engine == null || isRemoved()) return null;
         if (isMaster()) return this;
-        var masterPos = worldPosition.offset(offset);
+        var masterPos = masterPos();
         return level != null && level.hasChunkAt(masterPos) && level.getBlockEntity(masterPos) instanceof EngineTile master
             && !master.isRemoved() && master.isMaster() && master.engine == engine && master.nozzle() == nozzle() ? master : null;
     }
@@ -121,10 +124,10 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
 
     void checkSection(ServerLevel level) {
         if (engine == null || isMaster()) return;
-        var masterPos = worldPosition.offset(offset);
+        var masterPos = masterPos();
         if (!level.hasChunkAt(masterPos)) {
             level.scheduleTick(worldPosition, getBlockState().getBlock(), 20);
-        } else if (!(level.getBlockEntity(masterPos) instanceof EngineTile)) {
+        } else if (master() == null) {
             level.removeBlock(worldPosition, false);
         } else if (refreshPortsOnTick) {
             refreshPorts();
@@ -238,9 +241,9 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     }
     void dismantle(boolean drop) {
         if (level == null || engine == null) return;
-        if (!offset.equals(BlockPos.ZERO)) {
-            if (level.getBlockEntity(worldPosition.offset(offset)) instanceof EngineTile master && master.offset.equals(BlockPos.ZERO))
-                master.dismantle(drop);
+        if (!isMaster()) {
+            var root = master();
+            if (root != null) root.dismantle(drop);
             return;
         }
         if (drop) {
@@ -251,7 +254,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
             }
         }
         for (var cell : cells) if (level.getBlockEntity(cell) instanceof EngineTile piece
-                && cell.offset(piece.offset).equals(worldPosition)) level.removeBlock(cell,false);
+                && piece.masterPos().equals(worldPosition)) level.removeBlock(cell,false);
     }
     void tick() {
         if (!(level instanceof ServerLevel server) || !isMaster() || engine == null) return;
@@ -267,7 +270,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         if (OrbitSpaces.unoccupied(server)) return false;
         if (Math.floorMod(server.getGameTime() + worldPosition.hashCode(), 20) == 0) {
             for (var cell : cells) {
-                if (server.hasChunkAt(cell) && !(server.getBlockEntity(cell) instanceof EngineTile)) {
+                if (server.hasChunkAt(cell) && !(server.getBlockEntity(cell) instanceof EngineTile section && section.master() == this)) {
                     dismantle(true);
                     return false;
                 }

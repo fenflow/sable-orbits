@@ -136,7 +136,7 @@ class FuselageTile extends TileEntityInventoryBase
         Direction front = getBlockState().getValue(FuselageBlock.FACING);
         Direction back = front.getOpposite();
         int last = Math.max(1, (int) Math.ceil(part.height())) - 1;
-        cells = List.copyOf(Engines.cells(part, worldPosition, front));
+        cells = List.copyOf(Engines.cells(part, worldPosition, front, getBlockState().getValue(RocketPlacement.FOOTPRINT_ROTATION)));
         var faces = new ArrayList<Port>();
         for (BlockPos cell : cells) {
             int depth = axialDistance(cell.subtract(worldPosition), front);
@@ -148,7 +148,8 @@ class FuselageTile extends TileEntityInventoryBase
 
     RocketPart part() { return part; }
     boolean isMaster() { return offset.equals(BlockPos.ZERO); }
-    BlockPos masterPos() { return worldPosition.offset(offset); }
+    private BlockPos sectionOffset() { return offset.rotate(getBlockState().getValue(RocketPlacement.FOOTPRINT_ROTATION)); }
+    BlockPos masterPos() { return worldPosition.offset(sectionOffset()); }
     Mode mode() { return mode; }
     List<BlockPos> cells() { return cells; }
     List<Port> endPorts() { return ports; }
@@ -170,7 +171,7 @@ class FuselageTile extends TileEntityInventoryBase
     boolean isEnd(Direction side) {
         if (side == null || part == null) return false;
         Direction front = getBlockState().getValue(FuselageBlock.FACING);
-        int depth = -axialDistance(offset, front);
+        int depth = -axialDistance(sectionOffset(), front);
         return side == front.getOpposite() && depth == 0
             || side == front && depth == Math.max(1, (int) Math.ceil(part.height())) - 1;
     }

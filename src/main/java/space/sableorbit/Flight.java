@@ -150,6 +150,7 @@ final class Flight {
                     || members.contains(Sable.HELPER.getTrackingOrVehicleSubLevel(entity))
                     || standing.contains(entity)
                     || (entity instanceof ServerPlayer p && p.containerMenu instanceof Console menu && menu.controls(members))
+                    || (entity instanceof ServerPlayer p && p.containerMenu instanceof PinMenu menu && parts.stream().anyMatch(part -> menu.controls(p, part)))
                     || (entity instanceof ServerPlayer p && onDeck(p,parts,standingTolerance))
                     || (entity.getPersistentData().hasUUID("sableorbits_berth") && memberIds.contains(entity.getPersistentData().getUUID("sableorbits_berth")))) {
                 var root = entity.getRootVehicle();

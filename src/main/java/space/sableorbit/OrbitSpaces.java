@@ -26,14 +26,28 @@ import java.util.*;
 
 public final class OrbitSpaces extends SavedData {
     private static final int RETIREMENT_DELAY = 100;
+    private static final int UNLOADS_PER_RETIRING_ORBIT = 16;
+    private static final int UNLOADS_PER_SERVER_TICK = 64;
     private final Set<String> names = new HashSet<>();
     private final Set<String> parked = new HashSet<>();
     private final SequencedMap<ServerLevel, Integer> retirements = new LinkedHashMap<>();
+    private int unloadBudgetTick = -1;
+    private int unloadsRemaining;
     final CompoundTag addresses = new CompoundTag();
+    private byte[] pinKey = new byte[0];
+    byte[] pinKey() {
+        if (pinKey.length == 0) {
+            pinKey = new byte[32];
+            new java.security.SecureRandom().nextBytes(pinKey);
+            setDirty();
+        }
+        return pinKey;
+    }
     private static OrbitSpaces load(CompoundTag tag, HolderLookup.Provider provider) {
         var data = new OrbitSpaces();
         for (var key:tag.getAllKeys()) if (key.startsWith("station_")) data.names.add(key);
         for (var name : tag.getCompound("parked").getAllKeys()) if (data.names.contains(name)) data.parked.add(name);
+        data.pinKey = tag.getByteArray("pinKey");
         data.addresses.merge(tag.getCompound("addresses"));
         return data;
     }
@@ -41,6 +55,7 @@ public final class OrbitSpaces extends SavedData {
         return server.overworld().getDataStorage().computeIfAbsent(new Factory<>(OrbitSpaces::new, OrbitSpaces::load), "sableorbits_spaces");
     }
     @Override public CompoundTag save(CompoundTag tag, HolderLookup.Provider provider) {
+        tag.putByteArray("pinKey", pinKey.clone());
         tag.put("addresses",addresses.copy());
         names.forEach(name -> tag.putBoolean(name, true));
         var savedParked = new CompoundTag();
@@ -56,6 +71,7 @@ public final class OrbitSpaces extends SavedData {
     }
     static void restore(MinecraftServer server) {
         var store = data(server);
+        Hooks.watchNativeMigrations(server.getLevel(Orbit.ORBIT));
         for (String name : List.copyOf(store.names)) {
             if (!store.parked.contains(name)) retire(open(server, name));
         }
@@ -65,6 +81,23 @@ public final class OrbitSpaces extends SavedData {
         if (!isolated(level) || !level.dimension().location().getPath().startsWith("station_")) return;
         var server = level.getServer();
         data(server).retirements.putFirst(level, server.getTickCount() + RETIREMENT_DELAY);
+    }
+
+    public static int parkingUnloadAllowance(ServerLevel level) {
+        if (!isolated(level) || level.noSave() || !level.players().isEmpty()
+                || level.getChunkSource().getLoadedChunksCount() != 0) return 0;
+        var server = level.getServer();
+        var store = data(server);
+        var due = store.retirements.get(level);
+        int tick = server.getTickCount();
+        if (due == null || tick - due < 0 || !noPlots(level) || ForcedChunkManager.hasForcedChunks(level)) return 0;
+        if (store.unloadBudgetTick != tick) {
+            store.unloadBudgetTick = tick;
+            store.unloadsRemaining = UNLOADS_PER_SERVER_TICK;
+        }
+        int allowance = Math.min(UNLOADS_PER_RETIRING_ORBIT, store.unloadsRemaining);
+        store.unloadsRemaining -= allowance;
+        return allowance;
     }
 
     static void drainRetirements(MinecraftServer server) {
@@ -82,8 +115,8 @@ public final class OrbitSpaces extends SavedData {
 
             // Wait until chunk and entity unloads settle, then persist the level and Sable's empty occupancy.
             level.save(null, false, false);
-            store.retirements.remove(level);
-            if (empty(level) && !level.getChunkSource().chunkMap.hasWork() && unload(level)) {
+            if (empty(level) && !ForcedChunkManager.hasForcedChunks(level) && !level.getChunkSource().chunkMap.hasWork() && unload(level)) {
+                store.retirements.remove(level);
                 var name = level.dimension().location().getPath();
                 if (store.names.contains(name) && store.parked.add(name)) store.setDirty();
             }

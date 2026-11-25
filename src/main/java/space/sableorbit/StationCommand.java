@@ -48,8 +48,7 @@ final class StationCommand {
                     if(hit.isEmpty()) continue;
                     var feet=pose.transformPosition(hit.get()).add(0,.015,0);
                     if(!level.noCollision(player,player.getBoundingBox().move(feet.subtract(player.position())))) continue;
-                    Boarding.arrive(player,node.part(),feet,true);
-                    return true;
+                    return Boarding.arrive(player,node.part(),feet,true);
                 }
             }
         }
@@ -58,8 +57,7 @@ final class StationCommand {
         if(bounds!=null) {
             var position=new Vec3(bounds.getCenter().x,bounds.maxY+.1,bounds.getCenter().z);
             if(level.noCollision(player,player.getBoundingBox().move(position.subtract(player.position())))) {
-                Boarding.arrive(player,root,position,false);
-                return true;
+                return Boarding.arrive(player,root,position,false);
             }
         }
         return false;

@@ -27,7 +27,7 @@ final class EngineRenderer implements BlockEntityRenderer<EngineTile> {
         var center = visualCenter.subtract(Vec3.atLowerCornerOf(tile.getBlockPos()));
         pose.pushPose();
         pose.translate(center.x,center.y,center.z);
-        pose.mulPose(tile.getBlockState().getValue(EngineBlock.FACING).getOpposite().getRotation());
+        pose.mulPose(tile.modelRotation());
         pose.pushPose();
         if (part.getModel(false) != null && part.skin() != null) {
             models.render(part, EnginePlume.modelWidth(part), (float)part.height(), pose, buffers, tile.getLevel(), light, overlay);

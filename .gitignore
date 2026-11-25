@@ -47,6 +47,6 @@ client-run/
 /AGENTS.md
 /flight-test.ps1
 /src/flightTest/
-/src/main/java/space/sableorbit/StationGameTests.java
+/src/main/java/space/sableorbit/StationGameTests*.java
 /src/main/resources/data/sableorbits/structure/empty.nbt
 *.log

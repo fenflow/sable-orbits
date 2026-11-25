@@ -53,10 +53,13 @@ final class Engines {
         });
     }
     static List<BlockPos> cells(RocketPart engine, BlockPos inlet, Direction nozzle) {
+        return cells(engine, inlet, nozzle, Rotation.NONE);
+    }
+    static List<BlockPos> cells(RocketPart engine, BlockPos inlet, Direction nozzle, Rotation rotation) {
         int width = width(engine);
         int length = length(engine);
-        var u = nozzle.getAxis().isVertical() ? Direction.EAST : nozzle.getClockWise();
-        var v = nozzle.getAxis().isVertical() ? Direction.SOUTH : Direction.UP;
+        var u = nozzle.getAxis().isVertical() ? rotation.rotate(Direction.EAST) : nozzle.getClockWise();
+        var v = nozzle.getAxis().isVertical() ? rotation.rotate(Direction.SOUTH) : Direction.UP;
         var cells = new ArrayList<BlockPos>();
         for (int h=0; h<length; h++)
             for (int i=0; i<width; i++)
