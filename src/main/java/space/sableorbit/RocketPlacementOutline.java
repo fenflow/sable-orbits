@@ -28,15 +28,30 @@ final class RocketPlacementOutline {
 
     static void init() {
         WorldEffects.onBegin(RocketPlacementOutline::submit);
-        BlockOutlines.suppressWhen(() -> held(Minecraft.getInstance()) != null);
+        BlockOutlines.suppressWhen(() -> wheelHand(Minecraft.getInstance()) != null || held(Minecraft.getInstance()) != null);
+    }
+
+    private static InteractionHand wheelHand(Minecraft client) {
+        if (client.player == null) return null;
+        if (ReactionWheelBlock.wideWheel(client.player.getMainHandItem()) != null) return InteractionHand.MAIN_HAND;
+        if (held(client) == null && ReactionWheelBlock.wideWheel(client.player.getOffhandItem()) != null) return InteractionHand.OFF_HAND;
+        return null;
     }
 
     private static void submit(CameraInfo camera) {
         var client = Minecraft.getInstance();
-        var part = held(client);
-        if (part == null || client.options.hideGui || client.level == null || client.getCameraEntity() != client.player
+        if (client.player == null || client.options.hideGui || client.level == null || client.getCameraEntity() != client.player
             || !(client.hitResult instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) return;
-        var placement = RocketPlacement.of(part, new UseOnContext(client.player, InteractionHand.MAIN_HAND, hit));
+        var wheelHand = wheelHand(client);
+        RocketPlacement placement;
+        if (wheelHand != null) {
+            var wheel = ReactionWheelBlock.wideWheel(client.player.getItemInHand(wheelHand));
+            placement = RocketPlacement.wheel(wheel, new UseOnContext(client.player, wheelHand, hit));
+        } else {
+            var part = held(client);
+            if (part == null) return;
+            placement = RocketPlacement.of(part, new UseOnContext(client.player, InteractionHand.MAIN_HAND, hit));
+        }
         var anchor = hit.getBlockPos();
         var pose = new PoseStack();
         SubLevelPoses.around(pose, client.level, anchor, camera.pos, Frames.partialTick());

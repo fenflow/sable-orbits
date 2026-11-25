@@ -88,11 +88,19 @@ final class EnginePlume {
         };
     }
 
-    static void render(RocketPart part, PoseStack pose, MultiBufferSource buffers, float time, int phase) {
+    static int visibleBells(List<Bell> bells, double distanceSquared) {
+        if (distanceSquared <= 48 * 48) return bells.size();
+        return Math.min(bells.size(), distanceSquared <= 96 * 96 ? 12 : 4);
+    }
+
+    static void render(RocketPart part, PoseStack pose, MultiBufferSource buffers, float time, int phase, double distanceSquared) {
         int sprite = fuel(part).sprite;
         var vertices = buffers.getBuffer(PLUME);
         float width = modelWidth(part);
-        for (var bell : bells(part)) {
+        var bells = bells(part);
+        int count = visibleBells(bells, distanceSquared);
+        for (int i = 0; i < count; i++) {
+            var bell = bells.get(i * bells.size() / count);
             float radius = width * bell.radius * 0.88f;
             float pulse = (float)Math.sin(time * 1.2 + phase + 17 * bell.x + 7 * bell.z);
             float length = (radius * 5 + width * 0.22f) * (1 + 0.07f * pulse);

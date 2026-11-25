@@ -29,6 +29,7 @@ public final class ConsoleScreen extends AbstractContainerScreen<ChestMenu> {
     }
     @SubscribeEvent public static void engines(net.neoforged.neoforge.client.event.EntityRenderersEvent.RegisterRenderers e) {
         e.registerBlockEntityRenderer(Engines.TILE.get(),ctx -> new EngineRenderer());
+        e.registerBlockEntityRenderer(Engines.WHEEL_TILE.get(), ctx -> new ReactionWheelRenderer(ctx.getBlockRenderDispatcher()));
         e.registerBlockEntityRenderer(Fuselages.TILE.get(), ctx -> new FuselageRenderer());
         e.registerBlockEntityRenderer(Fuselages.SOLID_TILE.get(), ctx -> new FuselageRenderer());
     }

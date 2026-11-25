@@ -65,7 +65,14 @@ class FuselageTile extends TileEntityInventoryBase
         static Mode byId(int id) { return id >= 0 && id < VALUES.length ? VALUES[id] : INPUT; }
     }
 
-    record Port(BlockPos cell, Direction face) {}
+    record Port(BlockPos cell, Direction face, BlockPos target, Direction targetFace) {
+        Port(BlockPos cell, Direction face) {
+            this(cell, face, cell.relative(face), face.getOpposite());
+        }
+    }
+    record AdjacentTank(FuselageTile section, Direction face) {
+        FuselageTile tank() { return section.endTank(face); }
+    }
     private record FuelRelay(FuselageTile tank, FuselageTile firstHop) {}
 
     private RocketPart part;
@@ -369,12 +376,12 @@ class FuselageTile extends TileEntityInventoryBase
 
     private void pullFluid(ServerLevel server, FluidTankNTM tank) {
         for (Port port : ports) {
-            var target = port.cell().relative(port.face());
+            var target = port.target();
             if (!server.hasChunkAt(target)) continue;
             var neighbor = server.getBlockEntity(target);
             // Ducts schedule their own transfers. Adjacent fuselages share through pushFluid.
             if (neighbor instanceof FuselageTile || neighbor instanceof IFluidPipeMK2) continue;
-            var side = port.face().getOpposite();
+            var side = port.targetFace();
             if (neighbor == null && server.isEmptyBlock(target)) continue;
             FluidType[] types = tank.connectionTypes();
             if (tank instanceof AdjustableFuselageTank && tank.getDeclaredFluid() == Fluids.NONE) {
@@ -429,26 +436,30 @@ class FuselageTile extends TileEntityInventoryBase
 
     private void pushFluid(ServerLevel server, FluidTankNTM tank) {
         int budget = (int) Math.min(tank.getFill(), getProviderSpeed(tank.getFluid(), tank.getPressure()));
+        List<AdjacentTank> adjacentTanks = List.of();
         // Serve machines first so adjacent two-way tanks cannot take fuel away from a hungry engine.
         for (Port port : ports) {
-            if (budget == 0) break;
-            BlockPos target = port.cell().relative(port.face());
+            if (budget == 0) return;
+            BlockPos target = port.target();
             if (!server.hasChunkAt(target)) continue;
             var neighbor = server.getBlockEntity(target);
-            if (neighbor instanceof FuselageTile || neighbor instanceof IFluidPipeMK2) continue;
+            if (neighbor instanceof FuselageTile piece) {
+                if (adjacentTanks.isEmpty()) adjacentTanks = new ArrayList<>();
+                adjacentTanks.add(new AdjacentTank(piece, port.targetFace()));
+                continue;
+            }
+            if (neighbor instanceof IFluidPipeMK2) continue;
             if (neighbor == null && server.isEmptyBlock(target)) continue;
-            int accepted = pushToMachine(server, tank, target, port.face().getOpposite(), budget);
+            int accepted = pushToMachine(server, tank, target, port.targetFace(), budget);
             tank.setFill(tank.getFill() - accepted);
             budget -= accepted;
             if (accepted != 0) setChanged();
         }
         FuselageTile remainderDestination = null;
         boolean searchedRemainder = false;
-        for (Port port : ports) {
+        for (var adjacent : adjacentTanks) {
             if (budget == 0) break;
-            BlockPos target = port.cell().relative(port.face());
-            if (!server.hasChunkAt(target) || !(server.getBlockEntity(target) instanceof FuselageTile piece)) continue;
-            var other = piece.endTank(port.face().getOpposite());
+            var other = adjacent.tank();
             if (other == null || other == this || !other.canReceive()) continue;
             var receiving = other.tankFor(tank.getFluid());
             if (receiving == null) continue;
@@ -457,7 +468,7 @@ class FuselageTile extends TileEntityInventoryBase
                 int balance = balanceAmount(tank, receiving);
                 if (balance == 0 && receiving.getFill() == 0 && amount > 0) {
                     if (!searchedRemainder) {
-                        remainderDestination = remainderDestination(server, tank);
+                        remainderDestination = remainderDestination(server, tank, adjacentTanks);
                         searchedRemainder = true;
                     }
                     if (other == remainderDestination) balance = 1;
@@ -481,7 +492,7 @@ class FuselageTile extends TileEntityInventoryBase
         return (int)Math.max(0L, difference / ((long)sourceCapacity + destinationCapacity));
     }
 
-    FuselageTile remainderDestination(ServerLevel server, FluidTankNTM sourceTank) {
+    FuselageTile remainderDestination(ServerLevel server, FluidTankNTM sourceTank, List<AdjacentTank> adjacentTanks) {
         // A sub-unit balance stays at rest unless a consumer can take the remaining fuel.
         if (Math.floorMod(server.getGameTime() + worldPosition.asLong(), 10) != 0) return null;
         FluidType fluid = sourceTank == null ? null : sourceTank.getFluid();
@@ -489,25 +500,29 @@ class FuselageTile extends TileEntityInventoryBase
         var visited = new HashSet<FuselageTile>();
         var queue = new ArrayDeque<FuelRelay>();
         visited.add(this);
-        queue.addLast(new FuelRelay(this, null));
+        for (var adjacent : adjacentTanks) {
+            var next = adjacent.tank();
+            if (next != null && next.canReceive() && next.canExport() && next.hasRemainderSpace(fluid, pressure, true)
+                    && visited.add(next)) queue.addLast(new FuelRelay(next, next));
+        }
         while (!queue.isEmpty()) {
             var relay = queue.removeFirst();
             for (Port port : relay.tank().ports) {
-                var target = port.cell().relative(port.face());
+                var target = port.target();
                 if (!server.hasChunkAt(target)) continue;
                 var neighbor = server.getBlockEntity(target);
-                var side = port.face().getOpposite();
+                var side = port.targetFace();
                 if (neighbor instanceof FuselageTile section) {
                     var next = section.endTank(side);
                     if (next == null || !next.canReceive() || visited.contains(next)) continue;
                     if (!next.canExport()) {
-                        if (relay.firstHop() != null && next.hasRemainderSpace(fluid, pressure, false)) return relay.firstHop();
+                        if (next.hasRemainderSpace(fluid, pressure, false)) return relay.firstHop();
                         continue;
                     }
                     if (!next.hasRemainderSpace(fluid, pressure, true)) continue;
                     visited.add(next);
-                    queue.addLast(new FuelRelay(next, relay.firstHop() == null ? next : relay.firstHop()));
-                } else if (relay.firstHop() != null && !(neighbor instanceof IFluidPipeMK2)
+                    queue.addLast(new FuelRelay(next, relay.firstHop()));
+                } else if (!(neighbor instanceof IFluidPipeMK2)
                         && (neighbor != null || !server.isEmptyBlock(target))
                         && consumesRemainder(server, target, side, neighbor, fluid, pressure)) {
                     return relay.firstHop();

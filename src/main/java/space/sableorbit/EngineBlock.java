@@ -4,6 +4,8 @@ import com.hbm.api.fluidmk2.IFluidConnectorBlockMK2;
 import com.hbm.inventory.fluid.FluidType;
 import com.hbm.lib.ForgeDirection;
 import net.minecraft.core.*;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.WorldlyContainerHolder;
 import net.minecraft.world.entity.player.Player;
@@ -29,9 +31,17 @@ final class EngineBlock extends Block implements EntityBlock, WorldlyContainerHo
         return level.getBlockEntity(pos) instanceof EngineTile tile ? tile.solidContainer() : null;
     }
     @Override public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
-        if (type != Engines.TILE.get()) return null;
-        if (level.isClientSide) return state.getValue(SKIN) == 0 ? (l,p,s,t) -> EngineEffects.tick((EngineTile)t) : null;
+        if (type != Engines.TILE.get() || state.getValue(SKIN) != 0) return null;
+        if (level.isClientSide) return (l,p,s,t) -> EngineEffects.tick((EngineTile)t);
         return (l,p,s,t) -> ((EngineTile)t).tick();
+    }
+    @Override protected void tick(BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
+        if (level.getBlockEntity(pos) instanceof EngineTile section) section.checkSection(level);
+    }
+    @Override protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState next, boolean moving) {
+        if (level instanceof ServerLevel server && !next.is(this) && !moving
+                && level.getBlockEntity(pos) instanceof EngineTile tile && tile.isMaster()) tile.checkRemainingSections(server);
+        super.onRemove(state, level, pos, next, moving);
     }
     @Override public net.minecraft.world.item.ItemStack getCloneItemStack(LevelReader level, BlockPos pos, BlockState state) {
         return level.getBlockEntity(pos) instanceof EngineTile tile && tile.engine()!=null

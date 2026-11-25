@@ -35,6 +35,7 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     private RocketPart engine;
     private BlockPos offset = BlockPos.ZERO;
     private FluidTankNTM[] tanks = {};
+    private int liquidBurnRate;
     private SolidInput solidInput;
     private int solid;
     private boolean burning;
@@ -49,6 +50,8 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
             tanks = java.util.stream.Stream.of(part.getFuel(),part.getOxidizer())
                 .filter(f -> f != null && f != Fluids.NONE).map(f -> new FluidTankNTM(f,CAPACITY)).toArray(FluidTankNTM[]::new);
             for (var tank : tanks) tank.bindOwner(this);
+            liquidBurnRate = LIQUID_BURN_MULTIPLIER * Math.max(1,
+                (int)Math.ceil(part.getThrust() / (20.0 * 9.81 * Math.max(1, part.getISP()))));
         }
         if (part == null || !isMaster() || !"SOLID".equals(part.fuel())) solidInput = null;
         else if (solidInput == null) solidInput = new SolidInput();
@@ -60,6 +63,13 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
     net.minecraft.world.phys.AABB bounds() {
         if (cells.isEmpty()) return new net.minecraft.world.phys.AABB(worldPosition);
         return new net.minecraft.world.phys.AABB(cells.getFirst()).minmax(new net.minecraft.world.phys.AABB(cells.getLast()));
+    }
+    Vec3 visualCenter() {
+        var bounds = bounds();
+        var facing = nozzle();
+        double length = facing.getAxis().choose(bounds.getXsize(), bounds.getYsize(), bounds.getZsize());
+        // The mesh's +Y end mounts against the back of the occupied volume.
+        return bounds.getCenter().add(Vec3.atLowerCornerOf(facing.getNormal()).scale((engine.height() - length) * 0.5));
     }
     @Override public CompoundTag getUpdateTag(HolderLookup.Provider p) { var tag=saveWithoutMetadata(p);tag.putBoolean("burning",burning);return tag; }
     @Override public net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket getUpdatePacket() {
@@ -106,6 +116,28 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
         super.onLoad();
         // A rear section and its master can load in different chunks.
         refreshPortsOnTick = engine != null && rearSection();
+        if (level instanceof ServerLevel server && !isMaster()) server.scheduleTick(worldPosition, getBlockState().getBlock(), 1);
+    }
+
+    void checkSection(ServerLevel level) {
+        if (engine == null || isMaster()) return;
+        var masterPos = worldPosition.offset(offset);
+        if (!level.hasChunkAt(masterPos)) {
+            level.scheduleTick(worldPosition, getBlockState().getBlock(), 20);
+        } else if (!(level.getBlockEntity(masterPos) instanceof EngineTile)) {
+            level.removeBlock(worldPosition, false);
+        } else if (refreshPortsOnTick) {
+            refreshPorts();
+        }
+    }
+
+    void checkRemainingSections(ServerLevel level) {
+        var block = getBlockState().getBlock();
+        for (var cell : cells) {
+            if (!cell.equals(worldPosition) && level.hasChunkAt(cell) && level.getBlockState(cell).is(block)) {
+                level.scheduleTick(cell, block, 1);
+            }
+        }
     }
     void refreshPorts() {
         refreshPortsOnTick = false;
@@ -222,36 +254,33 @@ final class EngineTile extends BlockEntity implements IFluidStandardReceiverMK2,
                 && cell.offset(piece.offset).equals(worldPosition)) level.removeBlock(cell,false);
     }
     void tick() {
-        if (level == null || level.isClientSide) return;
+        if (!(level instanceof ServerLevel server) || !isMaster() || engine == null) return;
         if (refreshPortsOnTick) refreshPorts();
         loadSolidInput();
-        boolean active=burn();
+        boolean active = burn(server);
         if(burning!=active && !isRemoved()) {
             burning=active;
             level.sendBlockUpdated(worldPosition,getBlockState(),getBlockState(),Block.UPDATE_CLIENTS);
         }
     }
-    private boolean burn() {
-        if (OrbitSpaces.unoccupied(level)) return false;
-        if (!(level instanceof ServerLevel server) || engine == null) return false;
-        if (server.getGameTime()%20 == 0) {
-            if (!offset.equals(BlockPos.ZERO)) {
-                var master = worldPosition.offset(offset);
-                if (level.hasChunkAt(master) && !(level.getBlockEntity(master) instanceof EngineTile)) level.removeBlock(worldPosition,false);
-                return false;
+    private boolean burn(ServerLevel server) {
+        if (OrbitSpaces.unoccupied(server)) return false;
+        if (Math.floorMod(server.getGameTime() + worldPosition.hashCode(), 20) == 0) {
+            for (var cell : cells) {
+                if (server.hasChunkAt(cell) && !(server.getBlockEntity(cell) instanceof EngineTile)) {
+                    dismantle(true);
+                    return false;
+                }
             }
-            if (cells.stream().anyMatch(p -> level.hasChunkAt(p) && !(level.getBlockEntity(p) instanceof EngineTile))) { dismantle(true); return false; }
         }
-        if (OrbitSpaces.unoccupied(level) || !offset.equals(BlockPos.ZERO) || cells.stream().noneMatch(level::hasNeighborSignal)) return false;
         if (tanks.length == 0) {
             if (!"SOLID".equals(engine.fuel()) || solid < SOLID_BURN_PER_TICK) return false;
-            solid -= SOLID_BURN_PER_TICK;
         } else {
-            int rate = LIQUID_BURN_MULTIPLIER * Math.max(1,
-                (int)Math.ceil(engine.getThrust() / (20.0 * 9.81 * Math.max(1, engine.getISP()))));
-            for (var tank : tanks) if (tank.getFill() < rate) return false;
-            for (var tank : tanks) tank.setFill(tank.getFill()-rate);
+            for (var tank : tanks) if (tank.getFill() < liquidBurnRate) return false;
         }
+        if (cells.stream().noneMatch(server::hasNeighborSignal)) return false;
+        if (tanks.length == 0) solid -= SOLID_BURN_PER_TICK;
+        else for (var tank : tanks) tank.setFill(tank.getFill() - liquidBurnRate);
         setChanged();
         var ship=Sable.HELPER.getContaining(level,worldPosition);
         double impulse = engine.getThrust() * PHYSICAL_THRUST_SCALE / 20.0;

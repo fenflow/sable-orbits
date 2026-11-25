@@ -10,6 +10,7 @@ import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import net.minecraft.core.*;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.*;
@@ -19,6 +20,8 @@ import net.minecraft.world.phys.Vec3;
 import java.util.*;
 
 public final class Hooks {
+    public static OrbitalStation stationAtPlot(ServerSubLevel part) { return Stations.nativeStation(part); }
+
     public static OrbitalStation lookup(MinecraftServer server, int x, int z) {
         if (server == null) return null;
         for (var level : server.getAllLevels()) {
@@ -99,11 +102,28 @@ public final class Hooks {
         return Rendezvous.stations(server).stream().anyMatch(s -> Stations.nativeStation(s) == station && Rendezvous.linked(Stations.info(s)));
     }
 
+    public static List<Propulsion> refreshTravelEquipment(ServerLevel level, OrbitalStation station) {
+        if (!OrbitSpaces.isolated(level)) return List.of();
+        for (var part : Stations.loaded(level)) {
+            if (Stations.root(part) == part && Stations.nativeStation(part) == station)
+                return Stations.refreshEquipment(station, Flight.group(part));
+        }
+        return List.of();
+    }
+
     public static OrbitalStation stationInTransfer(Level level, BlockPos pos) {
         if (!(level instanceof ServerLevel) || !OrbitSpaces.isolated(level)
                 || !(Sable.HELPER.getContaining(level, pos) instanceof ServerSubLevel part)) return null;
         var station = Stations.nativeStation(part);
         return station != null && station.state != OrbitalStation.StationState.ORBIT ? station : null;
+    }
+
+    public static boolean landedStation(Level level, BlockPos pos) {
+        if (!(level instanceof ServerLevel server) || !(Sable.HELPER.getContaining(server, pos) instanceof ServerSubLevel plot)
+                || plot.isRemoved()) return false;
+        var data = plot.getUserDataTag();
+        return data != null && data.contains("sableorbits_landed", Tag.TAG_COMPOUND)
+            && data.getCompound("sableorbits_landed").hasUUID("root");
     }
 
     // Size and thrust belong to the burn that launched the station. A thruster

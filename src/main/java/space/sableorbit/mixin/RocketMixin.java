@@ -69,6 +69,7 @@ abstract class RocketMixin {
             } else {
                 sableorbits$missingDockTicks = 0;
             }
+            if (!r.isRemoved() && !r.canExitCapsule()) Docking.keepFlightLoaded(r);
             if (arriving && r.getState() != EntityRideableRocket.RocketState.DOCKING) {
                 destinationOverride = null;
                 sableorbits$missingDockTicks = 0;
@@ -108,6 +109,7 @@ abstract class RocketMixin {
         tag.remove("hbm_sable_ship_port");
         tag.putDouble("sableorbits_departure",rocket.getY()-8);
         rocket.setState(EntityRideableRocket.RocketState.UNDOCKING);
+        Docking.keepFlightLoaded(rocket);
     }
     @ModifyConstant(method="tick",constant=@Constant(doubleValue=32.0))
     private double undockingHeight(double normal) {

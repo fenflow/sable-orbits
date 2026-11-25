@@ -1,0 +1,8 @@
+{
+  "parent": "sableorbits:block/reaction_wheel_15",
+  "display": {
+    "gui": {"rotation": [30, 225, 0], "scale": [0.38, 0.38, 0.38]},
+    "ground": {"translation": [0, 3, 0], "scale": [0.19, 0.19, 0.19]},
+    "fixed": {"scale": [0.38, 0.38, 0.38]}
+  }
+}

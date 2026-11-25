@@ -20,15 +20,20 @@ import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.storage.DerivedLevelData;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.common.world.chunk.ForcedChunkManager;
 import net.neoforged.neoforge.event.level.LevelEvent;
 import java.util.*;
 
 public final class OrbitSpaces extends SavedData {
+    private static final int RETIREMENT_DELAY = 100;
     private final Set<String> names = new HashSet<>();
+    private final Set<String> parked = new HashSet<>();
+    private final SequencedMap<ServerLevel, Integer> retirements = new LinkedHashMap<>();
     final CompoundTag addresses = new CompoundTag();
     private static OrbitSpaces load(CompoundTag tag, HolderLookup.Provider provider) {
         var data = new OrbitSpaces();
         for (var key:tag.getAllKeys()) if (key.startsWith("station_")) data.names.add(key);
+        for (var name : tag.getCompound("parked").getAllKeys()) if (data.names.contains(name)) data.parked.add(name);
         data.addresses.merge(tag.getCompound("addresses"));
         return data;
     }
@@ -38,6 +43,9 @@ public final class OrbitSpaces extends SavedData {
     @Override public CompoundTag save(CompoundTag tag, HolderLookup.Provider provider) {
         tag.put("addresses",addresses.copy());
         names.forEach(name -> tag.putBoolean(name, true));
+        var savedParked = new CompoundTag();
+        parked.forEach(name -> savedParked.putBoolean(name, true));
+        tag.put("parked", savedParked);
         return tag;
     }
     public static boolean isolated(Level level) {
@@ -47,11 +55,51 @@ public final class OrbitSpaces extends SavedData {
         return level instanceof ServerLevel server && isolated(server) && server.players().isEmpty();
     }
     static void restore(MinecraftServer server) {
-        for (String name : List.copyOf(data(server).names)) open(server, name);
+        var store = data(server);
+        for (String name : List.copyOf(store.names)) {
+            if (!store.parked.contains(name)) retire(open(server, name));
+        }
     }
+
     static void retire(ServerLevel level) {
-        var store=data(level.getServer());
-        if(store.names.remove(level.dimension().location().getPath())) store.setDirty();
+        if (!isolated(level) || !level.dimension().location().getPath().startsWith("station_")) return;
+        var server = level.getServer();
+        data(server).retirements.putFirst(level, server.getTickCount() + RETIREMENT_DELAY);
+    }
+
+    static void drainRetirements(MinecraftServer server) {
+        if (server.getTickCount() % 20 != 0) return;
+        var store = data(server);
+        for (var pending : List.copyOf(store.retirements.entrySet())) {
+            var level = pending.getKey();
+            if (server.getTickCount() - pending.getValue() < 0) continue;
+            if (server.forgeGetWorldMap().get(level.dimension()) != level || !noPlots(level)) {
+                store.retirements.remove(level);
+                continue;
+            }
+            if (level.noSave() || !level.players().isEmpty() || level.getChunkSource().chunkMap.hasWork()
+                    || level.getAllEntities().iterator().hasNext() || ForcedChunkManager.hasForcedChunks(level)) continue;
+
+            // Wait until chunk and entity unloads settle, then persist the level and Sable's empty occupancy.
+            level.save(null, false, false);
+            store.retirements.remove(level);
+            if (empty(level) && !level.getChunkSource().chunkMap.hasWork() && unload(level)) {
+                var name = level.dimension().location().getPath();
+                if (store.names.contains(name) && store.parked.add(name)) store.setDirty();
+            }
+            // Avoid a burst of disk flushes when an older save contains several empty orbits.
+            break;
+        }
+    }
+
+    public static ServerLevel reopen(MinecraftServer server, ResourceKey<Level> dimension) {
+        if (!dimension.location().getNamespace().equals("sableorbits") || !server.isSameThread()
+                || !server.isRunning() || server.overworld() == null) return null;
+        var name = dimension.location().getPath();
+        if (!data(server).parked.contains(name)) return null;
+        var level = open(server, name);
+        retire(level);
+        return level;
     }
 
     static ResourceKey<Level> key(String name) {
@@ -70,8 +118,9 @@ public final class OrbitSpaces extends SavedData {
     static List<ServerSubLevel> transfer(List<ServerSubLevel> parts, String name, Vec3 offset, Collection<ServerPlayer> standingBeforeAssembly) {
         var server = parts.getFirst().getLevel().getServer();
         var store = data(server);
-        var existing = server.getLevel(key(name));
+        var existing = server.forgeGetWorldMap().get(key(name));
         boolean provisional = existing == null && !store.names.contains(name);
+        boolean wasParked = store.parked.contains(name);
         var target = existing == null ? open(server, name, !provisional) : existing;
         List<ServerSubLevel> moved = List.of();
         try {
@@ -81,21 +130,26 @@ public final class OrbitSpaces extends SavedData {
             if (provisional && moved.isEmpty() && empty(target)) {
                 unload(target);
             } else if (!moved.isEmpty() || provisional) {
-                if (store.names.add(name)) store.setDirty();
+                store.remember(name);
+            } else if (wasParked) {
+                retire(target);
             }
         }
     }
 
-    private static boolean empty(ServerLevel level) {
+    private static boolean noPlots(ServerLevel level) {
         var plots = SubLevelContainer.getContainer(level);
-        return level.players().isEmpty() && !level.getAllEntities().iterator().hasNext()
-            && (plots == null || plots.getAllSubLevels().isEmpty() && plots.getAllTickets().isEmpty());
+        return plots != null && plots.getAllSubLevels().isEmpty() && plots.getAllTickets().isEmpty()
+            && plots.getOccupancy().isEmpty();
     }
 
-    private static void unload(ServerLevel level) {
+    private static boolean empty(ServerLevel level) {
+        return level.players().isEmpty() && noPlots(level) && !level.getAllEntities().iterator().hasNext();
+    }
+
+    private static boolean unload(ServerLevel level) {
         var server = level.getServer();
-        // The level has no players, entities or plots and has never been registered for startup.
-        if (!server.forgeGetWorldMap().remove(level.dimension(), level)) return;
+        if (!server.forgeGetWorldMap().remove(level.dimension(), level)) return false;
         server.markWorldsDirty();
         NeoForge.EVENT_BUS.post(new LevelEvent.Unload(level));
         try {
@@ -103,6 +157,7 @@ public final class OrbitSpaces extends SavedData {
         } catch (IOException error) {
             Sable.LOGGER.error("Could not close unused orbit {}", level.dimension().location(), error);
         }
+        return true;
     }
 
     static ServerLevel open(MinecraftServer server, String name) {
@@ -111,10 +166,9 @@ public final class OrbitSpaces extends SavedData {
 
     private static ServerLevel open(MinecraftServer server, String name, boolean remember) {
         var key = key(name);
-        var current = server.getLevel(key);
+        var current = server.forgeGetWorldMap().get(key);
         if (current != null) {
-            var store = data(server);
-            if (remember && store.names.add(name)) store.setDirty();
+            if (remember) data(server).remember(name);
             return current;
         }
         var stem = server.registryAccess().registryOrThrow(Registries.LEVEL_STEM).get(Orbit.ORBIT.location());
@@ -130,9 +184,13 @@ public final class OrbitSpaces extends SavedData {
             BiomeManager.obfuscateSeed(server.overworld().getSeed()), List.of(), false, server.overworld().getRandomSequences());
         server.forgeGetWorldMap().put(key, level);
         server.markWorldsDirty();
-        var data = data(server);
-        if (remember && data.names.add(name)) data.setDirty();
+        if (remember) data(server).remember(name);
         NeoForge.EVENT_BUS.post(new LevelEvent.Load(level));
         return level;
+    }
+
+    private void remember(String name) {
+        boolean added = names.add(name);
+        if (parked.remove(name) || added) setDirty();
     }
 }

@@ -33,33 +33,35 @@ final class ExhaustBlast {
         double radius = width * .5;
         var region = new AABB(origin,end).inflate(radius * (Math.abs(side.x) + Math.abs(up.x)),
             radius * (Math.abs(side.y) + Math.abs(up.y)), radius * (Math.abs(side.z) + Math.abs(up.z)));
-        for (var entity : level.getEntities((Entity)null, region, e -> !e.isSpectator())) {
-            var box = entity.getBoundingBox();
-            var relative = box.getCenter().subtract(origin);
-            var start = origin.add(side.scale(Math.clamp(relative.dot(side), -radius, radius)))
-                .add(up.scale(Math.clamp(relative.dot(up), -radius, radius)));
-            var entry = box.contains(start) ? start : box.clip(start, start.add(axis.scale(range))).orElse(null);
-            if (entry == null || clip(level,start,entry).getType() == HitResult.Type.BLOCK) continue;
-            entity.igniteForSeconds(4);
-            var push = axis.scale(.45 * (1 - .65 * start.distanceTo(entry) / range));
-            entity.push(push.x, push.y, push.z);
-            entity.hurtMarked = true;
-        }
-        // Each stream transfers its share at the first solid surface it strikes.
-        // This keeps the total bounded even when the exhaust spans several hulls.
-        if (!Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(region)).iterator().hasNext()) return;
-        for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
-            var start = origin.add(side.scale(i * width / 3)).add(up.scale(j * width / 3));
-            var hit = clip(level, start, start.add(axis.scale(range)));
-            if (hit.getType() != HitResult.Type.BLOCK) continue;
-            var target = Sable.HELPER.getContaining(level, hit.getBlockPos());
-            if (!(target instanceof ServerSubLevel hull)) continue;
-            // Sable's projected clip returns the contact in the hit plot's storage coordinates.
-            var pose = hull.logicalPose();
-            double distance = start.distanceTo(pose.transformPosition(hit.getLocation()));
-            var localImpulse = pose.transformNormalInverse(axis).scale(impulse / 9 * (1 - .65 * distance / range));
-            var handle = RigidBodyHandle.of(hull);
-            if (handle != null && handle.isValid()) handle.applyImpulseAtPoint(hit.getLocation(), localImpulse);
+        try (var batch = new ExhaustClipBatch(level, new BoundingBox3d(region))) {
+            for (var entity : level.getEntities((Entity)null, region, e -> !e.isSpectator())) {
+                var box = entity.getBoundingBox();
+                var relative = box.getCenter().subtract(origin);
+                var start = origin.add(side.scale(Math.clamp(relative.dot(side), -radius, radius)))
+                    .add(up.scale(Math.clamp(relative.dot(up), -radius, radius)));
+                var entry = box.contains(start) ? start : box.clip(start, start.add(axis.scale(range))).orElse(null);
+                if (entry == null || clip(level, start, entry).getType() == HitResult.Type.BLOCK) continue;
+                entity.igniteForSeconds(4);
+                var push = axis.scale(.45 * (1 - .65 * start.distanceTo(entry) / range));
+                entity.push(push.x, push.y, push.z);
+                entity.hurtMarked = true;
+            }
+            // Each stream transfers its share at the first solid surface it strikes.
+            // This keeps the total bounded even when the exhaust spans several hulls.
+            if (batch.isEmpty()) return;
+            for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
+                var start = origin.add(side.scale(i * width / 3)).add(up.scale(j * width / 3));
+                var hit = clip(level, start, start.add(axis.scale(range)));
+                if (hit.getType() != HitResult.Type.BLOCK) continue;
+                var target = Sable.HELPER.getContaining(level, hit.getBlockPos());
+                if (!(target instanceof ServerSubLevel hull)) continue;
+                // Sable's projected clip returns the contact in the hit plot's storage coordinates.
+                var pose = hull.logicalPose();
+                double distance = start.distanceTo(pose.transformPosition(hit.getLocation()));
+                var localImpulse = pose.transformNormalInverse(axis).scale(impulse / 9 * (1 - .65 * distance / range));
+                var handle = RigidBodyHandle.of(hull);
+                if (handle != null && handle.isValid()) handle.applyImpulseAtPoint(hit.getLocation(), localImpulse);
+            }
         }
     }
 

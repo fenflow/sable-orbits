@@ -2,7 +2,6 @@ package space.sableorbit;
 
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.companion.math.BoundingBox3d;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason;
@@ -12,7 +11,12 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Vector3d;
+import space.sableorbit.mixin.TransferChunkAccess;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -75,15 +79,19 @@ final class Flight {
     }
 
     private static final boolean WIRES = net.neoforged.fml.ModList.get().isLoaded("drivebywire");
+    static boolean wiresLoaded() { return WIRES; }
     static List<ServerSubLevel> group(ServerSubLevel root) { return group(root,false); }
     static List<ServerSubLevel> group(ServerSubLevel root,boolean crossStationLinks) {
+        return group(root, crossStationLinks, new FlightTopology(root.getLevel()));
+    }
+
+    static List<ServerSubLevel> group(ServerSubLevel root, boolean crossStationLinks, FlightTopology topology) {
         var level = root.getLevel();
         var result = new ArrayList<ServerSubLevel>();
         var pending = new ArrayDeque<ServerSubLevel>();
         var seen = new HashSet<ServerSubLevel>();
         var info = Stations.info(root);
         var station = !crossStationLinks && info.hasUUID("root") ? info.getUUID("root") : null;
-        Map<ServerSubLevel,Set<ServerSubLevel>> wires = WIRES ? ShipWires.adjacency(level) : Map.of();
         Consumer<SubLevel> enqueue = neighbor -> {
             if (neighbor instanceof ServerSubLevel part && part.getLevel() == level && !part.isRemoved() && seen.add(part)) {
                 pending.addLast(part);
@@ -98,18 +106,9 @@ final class Flight {
                 if (candidate.hasUUID("root") && !station.equals(candidate.getUUID("root"))) continue;
             }
             result.add(part);
-            wires.getOrDefault(part, Set.of()).forEach(enqueue);
             // Sable's loading chain follows intersections and actor loading dependencies.
             // Visit those edges here so a different station root also stops traversal.
-            Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(part.boundingBox())).forEach(enqueue);
-            for (var actor : part.getPlot().getBlockEntityActors()) {
-                var dependencies = actor.sable$getLoadingDependencies();
-                if (dependencies != null) dependencies.forEach(enqueue);
-            }
-            for (var holder : part.getPlot().getLoadedChunks())
-                for (var tile : holder.getChunk().getBlockEntities().values())
-                    if (tile instanceof com.hbm.tileentity.network.TileEntityPylonBase pylon)
-                        for (var peer : pylon.getConnected()) enqueue.accept(Sable.HELPER.getContaining(level, peer));
+            topology.neighbors(part).forEach(enqueue);
         }
         return List.copyOf(result);
     }
@@ -140,18 +139,21 @@ final class Flight {
                 return List.of();
         }
         var members = new HashSet<>(parts);
+        var ids = parts.stream().map(ServerSubLevel::getUniqueId).toList();
+        var memberIds = Set.copyOf(ids);
+        var standing = Set.copyOf(standingBeforeAssembly);
+        double standingTolerance = OrbitSpaces.isolated(origin) ? 2.1 : 0.12;
         var wireLinks = WIRES ? ShipWires.onboard(origin,members) : java.util.List.<ShipWires.Link>of();
         var originals = new LinkedHashSet<Entity>();
         for (var entity : origin.getAllEntities()) {
             if (members.contains(Sable.HELPER.getContaining(entity))
                     || members.contains(Sable.HELPER.getTrackingOrVehicleSubLevel(entity))
-                    || standingBeforeAssembly.contains(entity)
+                    || standing.contains(entity)
                     || (entity instanceof ServerPlayer p && p.containerMenu instanceof Console menu && menu.controls(members))
-                    || (entity instanceof ServerPlayer p && onDeck(p,parts,OrbitSpaces.isolated(origin) ? 2.1 : 0.12))
-                    || (entity.getPersistentData().hasUUID("sableorbits_berth") && parts.stream().anyMatch(p -> p.getUniqueId().equals(entity.getPersistentData().getUUID("sableorbits_berth"))))) {
+                    || (entity instanceof ServerPlayer p && onDeck(p,parts,standingTolerance))
+                    || (entity.getPersistentData().hasUUID("sableorbits_berth") && memberIds.contains(entity.getPersistentData().getUUID("sableorbits_berth")))) {
                 var root = entity.getRootVehicle();
-                originals.add(root);
-                root.getIndirectPassengers().forEach(originals::add);
+                if (originals.add(root)) root.getIndirectPassengers().forEach(originals::add);
             }
         }
         var vehicles = new LinkedHashMap<Entity,Entity>();
@@ -179,7 +181,6 @@ final class Flight {
         }
 
         var loaded = new ArrayList<ServerSubLevel>();
-        var indexed = new ArrayList<ServerSubLevel>();
         var inserted = new ArrayList<Entity>();
         var attemptedPlayers = new ArrayList<ServerPlayer>();
         var destinationRiders = new LinkedHashMap<Entity,Entity>();
@@ -195,7 +196,8 @@ final class Flight {
         }
         var stagedWires = new ArrayList<ShipWires.Link>();
         try {
-            var ids = parts.stream().map(ServerSubLevel::getUniqueId).toList();
+            prefetchDestinationChunks(target, parts, offset);
+            var readyChunks = new HashSet<ChunkPos>();
             for (var part : parts) {
                 var tag = SubLevelSerializer.toData(part, ids).fullTag();
                 adaptSections(tag.getCompound("plot"),origin,target);
@@ -205,24 +207,27 @@ final class Flight {
                 tag.put("pose", SableNBTUtils.writePose3d(pose));
                 tag.remove("linear_velocity");
                 tag.remove("angular_velocity");
-                target.getChunk((int)Math.floor(pose.position().x / 16), (int)Math.floor(pose.position().z / 16));
+                var worldChunk = worldChunk(pose.position().x, pose.position().z);
+                if (readyChunks.add(worldChunk)) target.getChunk(worldChunk.x, worldChunk.z);
                 var copy = SubLevelSerializer.fullyLoad(target, SubLevelSerializer.fromData(tag));
                 if (copy == null) throw new IllegalStateException("Sable rejected destination plot");
+                var restoredPlot = copy.getPlot();
                 for (var holder : part.getPlot().getLoadedChunks()) {
-                    for (var entry : holder.getChunk().getBlockEntities().entrySet()) {
+                    var sourceChunk = holder.getChunk();
+                    if (sourceChunk.getBlockEntities().isEmpty()) continue;
+                    var restoredChunk = restoredPlot.getChunk(restoredPlot.toLocal(sourceChunk.getPos()));
+                    if (restoredChunk == null) throw new IllegalStateException("Missing destination plot chunk " + sourceChunk.getPos());
+                    for (var entry : sourceChunk.getBlockEntities().entrySet()) {
                         var pos = entry.getKey();
-                        var restored = target.getBlockEntity(pos);
+                        var restored = restoredChunk.getBlockEntity(pos, LevelChunk.EntityCreationType.IMMEDIATE);
                         if (restored == null || restored.getType() != entry.getValue().getType()
-                                || target.getBlockState(pos) != origin.getBlockState(pos))
+                                || restoredChunk.getBlockState(pos) != sourceChunk.getBlockState(pos))
                             throw new IllegalStateException("Incomplete block entity transfer at " + pos);
                     }
                 }
                 loaded.add(copy);
             }
-            for (var copy : loaded) {
-                indexed.add(copy);
-                StationMachines.restore(copy);
-            }
+            StationMachines.restore(loaded);
             if (WIRES) ShipWires.write(target, wireLinks, stagedWires);
             for (var entity : replacements.values()) {
                 if (!target.addFreshEntity(entity)) throw new IllegalStateException("Entity transfer rejected");
@@ -260,10 +265,11 @@ final class Flight {
             }
             if (WIRES) ShipWires.clear(target, stagedWires);
             inserted.forEach(Entity::discard);
-            indexed.forEach(StationMachines::depart);
             for (var part : parts) {
-                var copy = destination.getSubLevel(part.getUniqueId());
-                if (copy != null) destination.removeSubLevel(copy, SubLevelRemovalReason.REMOVED);
+                if (destination.getSubLevel(part.getUniqueId()) instanceof ServerSubLevel copy) {
+                    StationMachines.depart(copy);
+                    destination.removeSubLevel(copy, SubLevelRemovalReason.REMOVED);
+                }
             }
             Sable.LOGGER.error("Station transfer could not stage its destination", ex);
             return List.of();
@@ -285,7 +291,29 @@ final class Flight {
             Stations.track(copy);
             StationLife.remember(copy,Stations.info(copy));
         }
+        OrbitSpaces.retire(origin);
         return loaded;
+    }
+
+    private static void prefetchDestinationChunks(ServerLevel target, List<ServerSubLevel> parts, Vec3 offset) {
+        var chunks = target.getChunkSource();
+        var requested = new HashSet<ChunkPos>();
+        var center = new Vector3d();
+        for (var part : parts) {
+            // Sable serializes the pose around the current center of mass.
+            center.set(part.getSelfMassTracker().getCenterOfMass());
+            part.logicalPose().transformPosition(center);
+            var chunk = worldChunk(center.x + offset.x, center.z + offset.z);
+            if (requested.add(chunk) && chunks.getChunkNow(chunk.x, chunk.z) == null
+                    && !Sable.HELPER.isInPlotGrid(target, chunk.getWorldPosition())) {
+                // Submit all cold chunk requests before serialization and the first required getChunk.
+                ((TransferChunkAccess)chunks).sableorbits$requestChunk(chunk.x, chunk.z, ChunkStatus.FULL, true);
+            }
+        }
+    }
+
+    private static ChunkPos worldChunk(double x, double z) {
+        return new ChunkPos((int)Math.floor(x / 16), (int)Math.floor(z / 16));
     }
     private static boolean onDeck(ServerPlayer player,List<ServerSubLevel> parts,double tolerance) {
         for (var part : parts) {

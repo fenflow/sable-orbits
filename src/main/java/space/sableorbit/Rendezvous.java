@@ -1,6 +1,10 @@
 package space.sableorbit;
 
 import com.ntmspace.orbit.OrbitalStation;
+import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.math.BoundingBox3d;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
@@ -60,13 +64,15 @@ final class Rendezvous {
         return box;
     }
     private static boolean join(ServerSubLevel guest, ServerSubLevel host, boolean publicVisit) {
-        var hostParts = Flight.group(host);
+        var hostTopology = new FlightTopology(host.getLevel());
+        var hostParts = Flight.group(host, false, hostTopology);
         var guestParts = Flight.group(guest);
         var a = bounds(hostParts);
         var b = bounds(guestParts);
         if (a == null || b == null) return false;
         var obstacles = Stations.loaded(host.getLevel()).stream().filter(s -> Stations.root(s) == s && s != host)
-            .map(Rendezvous::bounds).filter(Objects::nonNull).map(box -> box.inflate(1)).toList();
+            .map(part -> bounds(Flight.group(part, false, hostTopology)))
+            .filter(Objects::nonNull).map(box -> box.inflate(1)).toList();
         var hostHull = HullDistance.hull(hostParts);
         var guestHull = HullDistance.hull(guestParts);
         double width = (a.getXsize() + b.getXsize()) / 2, depth = (a.getZsize() + b.getZsize()) / 2;
@@ -138,26 +144,94 @@ final class Rendezvous {
         var pa=sample(a);var pb=sample(b);
         return pa!=null && pb!=null && a.logicalPose().transformPosition(pa.getCenter()).distanceToSqr(b.logicalPose().transformPosition(pb.getCenter()))<=250*250;
     }
-    static void checkDistance(ServerSubLevel guest) {
+    // All guests of a host see the same plots and poses during a maintenance pass.
+    static final class DistanceChecks {
+        private final ServerLevel level;
+        private FlightTopology topology;
+        private final Map<ServerSubLevel, List<ServerSubLevel>> groups = new IdentityHashMap<>();
+        private final Map<ServerSubLevel, HullDistance.Hull> hulls = new IdentityHashMap<>();
+
+        DistanceChecks(ServerLevel level) {
+            this.level = level;
+            topology = new FlightTopology(level);
+        }
+
+        FlightTopology topology() { return topology; }
+
+        List<ServerSubLevel> parts(ServerSubLevel root) {
+            return groups.computeIfAbsent(root, part -> Flight.group(part, false, topology));
+        }
+
+        HullDistance.Hull hull(ServerSubLevel root) {
+            return hulls.computeIfAbsent(root, part -> HullDistance.hull(parts(part)));
+        }
+
+        void invalidateGroups() {
+            groups.clear();
+            hulls.clear();
+        }
+
+        void invalidateTopology() {
+            invalidateGroups();
+            topology = new FlightTopology(level);
+        }
+    }
+
+    private record Contact(UUID host, UUID hostPlot, BlockPos hostBlock, UUID guestPlot, BlockPos guestBlock) {
+        boolean provesRange(ServerSubLevel currentHost, List<ServerSubLevel> hostParts,
+                            List<ServerSubLevel> guestParts, SubLevelContainer container) {
+            if (!host.equals(currentHost.getUniqueId())
+                    || !(container.getSubLevel(hostPlot) instanceof ServerSubLevel a) || !hostParts.contains(a)
+                    || !(container.getSubLevel(guestPlot) instanceof ServerSubLevel b) || !guestParts.contains(b)) return false;
+            return occupied(a, hostBlock) && occupied(b, guestBlock)
+                && HullDistance.distanceSquared(blockBounds(a, hostBlock), blockBounds(b, guestBlock)) <= 250*250;
+        }
+
+        private static boolean occupied(ServerSubLevel part, BlockPos pos) {
+            var chunk = part.getLevel().getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
+            return chunk != null && !chunk.getBlockState(pos).isAir();
+        }
+
+        private static AABB blockBounds(ServerSubLevel part, BlockPos pos) {
+            return new BoundingBox3d(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1, pos.getY() + 1, pos.getZ() + 1)
+                .transform(part.logicalPose()).toMojang();
+        }
+    }
+
+    private static final Map<ServerSubLevel, Contact> contacts = new WeakHashMap<>();
+
+    static void checkDistance(ServerSubLevel guest, DistanceChecks checks) {
         var tag = Stations.info(guest);
         if (!tag.hasUUID("host")) return;
-        var container = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(guest.getLevel());
+        var container = SubLevelContainer.getContainer(guest.getLevel());
         if (!(container.getSubLevel(tag.getUUID("host")) instanceof ServerSubLevel host)) return;
-        if(withinRange(host,guest)) return;
-        var hostParts = Flight.group(host);
-        var guestParts = Flight.group(guest);
+        if (withinRange(host, guest)) return;
+        var hostParts = checks.parts(host);
+        var guestParts = checks.parts(guest);
+        var contact = contacts.get(guest);
+        if (contact != null && contact.provesRange(host, hostParts, guestParts, container)) return;
         var a = bounds(hostParts);
         var b = bounds(guestParts);
         if (a == null || b == null) return;
-        double x = Math.max(0, Math.max(a.minX-b.maxX, b.minX-a.maxX));
-        double y = Math.max(0, Math.max(a.minY-b.maxY, b.minY-a.maxY));
-        double z = Math.max(0, Math.max(a.minZ-b.maxZ, b.minZ-a.maxZ));
-        if (x*x + y*y + z*z > 250*250 || HullDistance.closest(HullDistance.hull(hostParts), HullDistance.hull(guestParts), Vec3.ZERO, 250) == null)
-            separate(guest, host);
+        if (HullDistance.distanceSquared(a, b) <= 250*250) {
+            var nearest = HullDistance.closeBlocks(checks.hull(host), checks.hull(guest), 250);
+            if (nearest != null) {
+                contacts.put(guest, new Contact(host.getUniqueId(), nearest.host().getUniqueId(), nearest.hostBlock(),
+                    nearest.guest().getUniqueId(), nearest.guestBlock()));
+                return;
+            }
+        }
+        contacts.remove(guest);
+        if (separate(guest, host, guestParts)) checks.invalidateTopology();
     }
+
     private static boolean separate(ServerSubLevel guest, ServerSubLevel host) {
+        return separate(guest, host, Flight.group(guest));
+    }
+
+    private static boolean separate(ServerSubLevel guest, ServerSubLevel host, List<ServerSubLevel> parts) {
         var p = guest.logicalPose().position();
-        var copies = OrbitSpaces.transfer(Flight.group(guest), OrbitSpaces.homeName(host.getLevel(), guest.getUniqueId()),
+        var copies = OrbitSpaces.transfer(parts, OrbitSpaces.homeName(host.getLevel(), guest.getUniqueId()),
             new Vec3(512-p.x, 128-p.y, 512-p.z));
         if (copies.isEmpty()) return false;
         var tag = Stations.info(copies.getFirst());

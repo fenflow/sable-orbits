@@ -2,7 +2,6 @@ package space.sableorbit;
 
 import com.hbm.packet.PlayerInformPayload;
 import com.ntmspace.orbit.*;
-import com.ntmspace.tileentity.station.TileEntityOrbitalStationComputer;
 import dev.golem.core.net.GolemNetwork;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.api.physics.handle.RigidBodyHandle;
@@ -74,12 +73,12 @@ final class Stations {
             }
         }
         if (OrbitSpaces.isolated(level)) {
-            if (level.getGameTime() % 20 != 0) return;
-            for (var part : loaded(level)) {
-                if (part.isRemoved()) continue;
-                StationMachines.restore(part);
-                if (root(part) == part) tickStation(part);
-            }
+            int phase = Math.floorMod(level.dimension().location().hashCode(), 20);
+            if (Math.floorMod(level.getGameTime(), 20) != phase) return;
+            var plots = loaded(level);
+            for (var part : plots) if (!part.isRemoved()) StationMachines.restore(part);
+            var checks = new Rendezvous.DistanceChecks(level);
+            for (var part : plots) if (!part.isRemoved() && root(part) == part) tickStation(part, checks);
             for (var player : List.copyOf(level.players())) playerFall(player);
         } else if (Orbit.levelOf(Orbit.bodyOf(level)).equals(level.dimension())) {
             var visited = new HashSet<ServerSubLevel>();
@@ -146,16 +145,24 @@ final class Stations {
         data.setDirty();
     }
     static void tickStation(ServerSubLevel root) {
+        tickStation(root, new Rendezvous.DistanceChecks(root.getLevel()));
+    }
+
+    private static void tickStation(ServerSubLevel root, Rendezvous.DistanceChecks checks) {
         var tag = info(root);
-        var parts = Flight.group(root);
         var station = nativeStation(root);
         if (station == null) return;
-        for (var part : parts) if (!info(part).hasUUID("root")) set(part,tag.copy());
-        refreshEquipment(station,parts);
+        var parts = checks.parts(root);
+        for (var part : parts) {
+            if (!info(part).hasUUID("root")) {
+                set(part, tag.copy());
+                checks.invalidateGroups();
+            }
+        }
+        refreshEquipment(station, parts, checks.topology());
         var crew = Flight.crew(parts);
         if (!tag.hasUUID("owner") && !crew.isEmpty()) tag.putUUID("owner",crew.getFirst().getUUID());
-        if (Rendezvous.linked(tag) || parts.stream().flatMap(part -> part.getPlot().getLoadedChunks().stream())
-                .flatMap(chunk -> chunk.getChunk().getBlockEntities().values().stream()).anyMatch(TileEntityOrbitalStationComputer.class::isInstance)) {
+        if (Rendezvous.linked(tag) || parts.stream().anyMatch(part -> checks.topology().equipment(part).computer())) {
             tag.remove("decay");
         } else if (!crew.isEmpty()) {
             int seconds = Math.max(0, 300 - tag.getInt("decay") - 1);
@@ -163,25 +170,35 @@ final class Stations {
             String time = "%d:%02d".formatted(seconds / 60, seconds % 60);
             for (var player : crew) GolemNetwork.sendToPlayer(player, PlayerInformPayload.CODEC,
                 PlayerInformPayload.of(7342, 1200, ChatFormatting.YELLOW, "The station will fall in " + time + " without a station computer..."));
-            if (seconds == 0) land(root, tag.getDouble("launchX"), tag.getDouble("launchZ"));
+            if (seconds == 0 && land(root, tag.getDouble("launchX"), tag.getDouble("launchZ"))) checks.invalidateTopology();
         }
-        if (!root.isRemoved()) Rendezvous.checkDistance(root);
+        if (!root.isRemoved()) Rendezvous.checkDistance(root, checks);
     }
-    static void refreshEquipment(OrbitalStation station,List<ServerSubLevel> parts) {
+
+    static List<Propulsion> refreshEquipment(OrbitalStation station, List<ServerSubLevel> parts) {
+        return refreshEquipment(station, parts, new FlightTopology(parts.getFirst().getLevel()));
+    }
+
+    private static List<Propulsion> refreshEquipment(OrbitalStation station, List<ServerSubLevel> parts, FlightTopology topology) {
         var equipment = (space.sableorbit.mixin.EquipmentAccess)(Object)station;
         equipment.sableorbits$ports().clear();
         equipment.sableorbits$mainPort(null);
         equipment.sableorbits$engines().clear();
-        for (var part : parts) for (var holder : part.getPlot().getLoadedChunks())
-            for (var tile : holder.getChunk().getBlockEntities().values()) {
-                if (tile.isRemoved()) continue;
-                if (tile instanceof com.ntmspace.tileentity.station.TileEntityOrbitalStation port) {
-                    station.addPort(port);
-                    Docking.keepApproachLoaded(port);
-                }
-                if (tile instanceof Propulsion engine) equipment.sableorbits$engines().add(engine);
+        var thrusters = new ArrayList<StationThrusters.Thruster>();
+        for (var part : parts) {
+            var indexed = topology.equipment(part);
+            for (var port : indexed.ports()) {
+                station.addPort(port);
+                Docking.keepBerthLoaded(port);
             }
+            for (var engine : indexed.engines()) {
+                equipment.sableorbits$engines().add(engine);
+                if (engine instanceof StationThrusters.Alignment) thrusters.add(new StationThrusters.Thruster(engine, part));
+            }
+        }
+        var excludedBurns = StationThrusters.refresh(station, thrusters);
         station.hasEngines = !station.engines().isEmpty();
+        return excludedBurns;
     }
     static boolean land(ServerSubLevel root, double x, double z) {
         var station = nativeStation(root);

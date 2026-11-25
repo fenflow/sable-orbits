@@ -24,9 +24,13 @@ public class SableOrbits {
         bus.addListener(EvaMove::register);
         Stations.initialize();
         NeoForge.EVENT_BUS.addListener(Attitude::tick);
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.tick.ServerTickEvent.Post e) -> StationLife.tick(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.tick.ServerTickEvent.Post e) -> {
+            StationLife.tick(e.getServer());
+            OrbitSpaces.drainRetirements(e.getServer());
+        });
         NeoForge.EVENT_BUS.addListener(StationCommand::register);
         NeoForge.EVENT_BUS.addListener(Engines::place);
+        NeoForge.EVENT_BUS.addListener(ReactionWheelBlock::place);
         NeoForge.EVENT_BUS.addListener(Fuselages::place);
         NeoForge.EVENT_BUS.addListener(Fuselages::tooltip);
         NeoForge.EVENT_BUS.addListener((ServerStartedEvent e) -> OrbitSpaces.restore(e.getServer()));

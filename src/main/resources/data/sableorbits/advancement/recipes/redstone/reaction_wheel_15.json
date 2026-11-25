@@ -1,0 +1,15 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_wheel": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {"items": [{"items": "sableorbits:reaction_wheel"}]}
+    },
+    "has_recipe": {
+      "trigger": "minecraft:recipe_unlocked",
+      "conditions": {"recipe": "sableorbits:reaction_wheel_15"}
+    }
+  },
+  "requirements": [["has_wheel", "has_recipe"]],
+  "rewards": {"recipes": ["sableorbits:reaction_wheel_15"]}
+}

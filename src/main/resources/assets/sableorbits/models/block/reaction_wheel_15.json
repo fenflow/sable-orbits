@@ -1,0 +1,9 @@
+{
+  "parent": "minecraft:block/block",
+  "loader": "neoforge:obj",
+  "model": "sableorbits:models/block/reaction_wheel_15.obj",
+  "automatic_culling": false,
+  "emissive_ambient": false,
+  "flip_v": true,
+  "textures": {"particle": "sableorbits:block/reaction_wheel_15"}
+}

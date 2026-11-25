@@ -9,16 +9,44 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.server.level.TicketType;
+import net.minecraft.world.level.ChunkPos;
+
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 public final class Docking {
-    private static final net.minecraft.server.level.TicketType<BlockPos> APPROACH =
-        net.minecraft.server.level.TicketType.create("sableorbits_dock",BlockPos::compareTo,60);
+    private static final TicketType<BlockPos> BERTH =
+        TicketType.create("sableorbits_berth", BlockPos::compareTo, 60);
+    private static final TicketType<Integer> FLIGHT =
+        TicketType.create("sableorbits_dock_flight", Integer::compare, 3);
+    private static final Set<TileEntityOrbitalStation> seenPorts = Collections.newSetFromMap(new WeakHashMap<>());
 
-    static void keepApproachLoaded(TileEntityOrbitalStation dock) {
+    static void keepBerthLoaded(TileEntityOrbitalStation dock) {
         if (dock.getLevel() instanceof ServerLevel level && OrbitSpaces.isolated(level)) {
-            var position = position(dock);
-            level.getChunkSource().addRegionTicket(APPROACH,new net.minecraft.world.level.ChunkPos(position),2,dock.getBlockPos(),true);
+            // A newly loaded port needs one window to reconnect to a saved docked entity.
+            boolean loading = seenPorts.add(dock);
+            var attached = dock.getDocked();
+            if (attached != null && attached.entity().level() == level && !attached.entity().isRemoved()) {
+                level.getChunkSource().addRegionTicket(BERTH, attached.entity().chunkPosition(), 2, dock.getBlockPos());
+            } else if (loading) {
+                // A rotated capsule may have been saved in a chunk adjacent to the port.
+                level.getChunkSource().addRegionTicket(BERTH, new ChunkPos(position(dock)), 3, dock.getBlockPos());
+                level.resetEmptyTime();
+            }
         }
+    }
+
+    public static void keepFlightLoaded(EntityRideableRocket rocket) {
+        if (rocket.level() instanceof ServerLevel level && OrbitSpaces.isolated(level))
+            keepFlightLoaded(level, rocket.chunkPosition(), rocket.getId());
+    }
+
+    private static void keepFlightLoaded(ServerLevel level, ChunkPos chunk, int rocketId) {
+        // A forced timed ticket leaves a separate force-tick entry behind on expiry.
+        level.getChunkSource().addRegionTicket(FLIGHT, chunk, 2, rocketId);
+        level.resetEmptyTime();
     }
 
     public static ServerSubLevel addressed(MinecraftServer server,int x,int z) {
@@ -49,6 +77,7 @@ public final class Docking {
         var tag = craft.entity().getPersistentData();
         tag.putUUID("sableorbits_berth",part.getUniqueId());
         tag.putLong("sableorbits_port", dock.getBlockPos().asLong());
+        keepBerthLoaded(dock);
     }
     public static void follow(EntityRideableRocket craft) {
         if (!(craft.level() instanceof ServerLevel level)) return;
@@ -88,8 +117,10 @@ public final class Docking {
         var dock = receivingPort(Stations.nativeStation(station));
         if (dock == null) return true;
         var pos = Sable.HELPER.projectOutOfSubLevel(station.getLevel(),dock.getBlockPos().getCenter().add(0,-12,0));
-        passenger.getRootVehicle().getPersistentData().remove("sableorbits_gap");
-        passenger.getRootVehicle().getPersistentData().putUUID("sableorbits_dock",station.getUniqueId());
+        var vehicle = passenger.getRootVehicle();
+        vehicle.getPersistentData().remove("sableorbits_gap");
+        vehicle.getPersistentData().putUUID("sableorbits_dock",station.getUniqueId());
+        keepFlightLoaded(station.getLevel(), new ChunkPos(BlockPos.containing(pos)), vehicle.getId());
         SpaceTeleporter.teleport(passenger,station.getLevel().dimension(),pos.x,pos.y,pos.z,false);
         return true;
     }

@@ -1,7 +1,12 @@
 package space.sableorbit.mixin;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
+import com.ntmspace.world.SolarSystem.Body;
 import space.sableorbit.*;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.*;
 import com.ntmspace.orbit.*;
@@ -9,7 +14,19 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 @Mixin(value=OrbitalStation.class, remap=false)
-abstract class StationMixin {
+abstract class StationMixin implements OrbitSunlight.EclipseClock {
+    @Shadow private double eclipseAmount;
+    @Unique private long sableorbits$lastEclipseTick = Long.MIN_VALUE;
+
+    @Override public double sableorbits$eclipseAt(long gameTime) {
+        if (gameTime != sableorbits$lastEclipseTick) {
+            // Native update clears this cache only when the station ticks its travel state.
+            eclipseAmount = -1;
+            sableorbits$lastEclipseTick = gameTime;
+        }
+        return ((OrbitalStation)(Object)this).getEclipseAmount(gameTime);
+    }
+
     @Inject(method="getStationFromPosition", at=@At("HEAD"), cancellable=true)
     private static void locate(MinecraftServer server, int x, int z, CallbackInfoReturnable<OrbitalStation> cir) {
         var station = Hooks.lookup(server,x,z);
@@ -49,7 +66,18 @@ abstract class StationMixin {
     }
     @Inject(method="travelTo", at=@At("HEAD"), cancellable=true)
     private void lock(Level level, com.ntmspace.world.SolarSystem.Body body, CallbackInfo ci) {
-        if (level instanceof ServerLevel sl && Hooks.travelLocked(sl.getServer(), (OrbitalStation)(Object)this)) ci.cancel();
+        if (level instanceof ServerLevel server && Hooks.travelLocked(server.getServer(), (OrbitalStation)(Object)this)) ci.cancel();
+    }
+    @WrapOperation(method = "travelTo", at = @At(value = "INVOKE", target =
+        "Lcom/ntmspace/orbit/OrbitalStation;canTravel(Lcom/ntmspace/world/SolarSystem$Body;Lcom/ntmspace/world/SolarSystem$Body;)Z"))
+    private boolean validateAlignment(OrbitalStation station, Body from, Body to, Operation<Boolean> canTravel,
+                                      @Local(argsOnly = true) Level level) {
+        if (!(level instanceof ServerLevel server)) return canTravel.call(station, from, to);
+        var excludedBurns = Hooks.refreshTravelEquipment(server, station);
+        boolean allowed = canTravel.call(station, from, to);
+        // The compatibility mod yields the burn flags during travel, including ones left on by redstone.
+        if (allowed) excludedBurns.forEach(Propulsion::endBurn);
+        return allowed;
     }
     @Inject(method="addStation", at=@At("RETURN"))
     private static void deploy(MinecraftServer server,int x,int z,com.ntmspace.world.SolarSystem.Body body,CallbackInfo ci) {

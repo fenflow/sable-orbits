@@ -13,6 +13,9 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.util.ArrayList;
+import java.util.List;
+
 final class SolidFuselageTile extends FuselageTile {
     private int charge;
 
@@ -40,29 +43,31 @@ final class SolidFuselageTile extends FuselageTile {
 
     private void exportCharge(ServerLevel server) {
         int original = charge;
+        List<AdjacentTank> adjacentTanks = List.of();
         for (Port port : endPorts()) {
-            var target = port.cell().relative(port.face());
             if (charge == 0) break;
-            if (server.hasChunkAt(target) && server.getBlockEntity(target) instanceof EngineTile section) {
-                var engine = section.solidInlet(port.face().getOpposite());
+            if (!server.hasChunkAt(port.target())) continue;
+            var neighbor = server.getBlockEntity(port.target());
+            if (neighbor instanceof EngineTile section) {
+                var engine = section.solidInlet(port.targetFace());
                 if (engine != null) charge -= engine.acceptSolid(charge);
+            } else if (neighbor instanceof SolidFuselageTile section) {
+                if (adjacentTanks.isEmpty()) adjacentTanks = new ArrayList<>();
+                adjacentTanks.add(new AdjacentTank(section, port.targetFace()));
             }
         }
         FuselageTile remainderDestination = null;
         boolean searchedRemainder = false;
-        for (Port port : endPorts()) {
-            var target = port.cell().relative(port.face());
+        for (var adjacent : adjacentTanks) {
             if (charge == 0) break;
-            if (!server.hasChunkAt(target) || !(server.getBlockEntity(target) instanceof SolidFuselageTile section)
-                || !section.isEnd(port.face().getOpposite()) || !(section.master() instanceof SolidFuselageTile other)
-                || other == this || !other.canReceive()) continue;
+            if (!(adjacent.tank() instanceof SolidFuselageTile other) || other == this || !other.canReceive()) continue;
             int amount = Math.min(charge, other.capacity() - other.charge);
             if (canReceive() && other.canExport()) {
                 // Equalize connected two-way magazines so the upstream charge stays available for demand at either end.
                 int balance = balanceAmount(charge, capacity(), other.charge, other.capacity());
                 if (balance == 0 && other.charge == 0 && amount > 0) {
                     if (!searchedRemainder) {
-                        remainderDestination = remainderDestination(server, null);
+                        remainderDestination = remainderDestination(server, null, adjacentTanks);
                         searchedRemainder = true;
                     }
                     if (other == remainderDestination) balance = 1;

@@ -125,7 +125,7 @@ final class Console extends ChestMenu {
         if (dest == null || dest.isOrbit() || !ItemVOTVdrive.getProcessed(disk) || Rendezvous.linked(Stations.info(root))) { result(false); return; }
         var station = Stations.nativeStation(root);
         var body = SolarSystem.body(dest.body());
-        if (body == null || body == station.orbiting || station.engines().isEmpty()) { result(false); return; }
+        if (body == null || body == station.orbiting) { result(false); return; }
         station.travelTo(root.getLevel(), body);
         result(station.state != OrbitalStation.StationState.ORBIT);
     }

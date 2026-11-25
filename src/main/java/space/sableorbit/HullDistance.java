@@ -146,6 +146,23 @@ final class HullDistance {
     // The returned vector is directed from host to guest. A null result means the
     // closest occupied blocks are beyond the supplied search radius.
     static Vec3 closest(Hull host, Hull guest, Vec3 offset, double radius) {
+        var pair = closestPair(host, guest, offset, radius);
+        return pair == null ? null : new Vec3(pair.x(), pair.y(), pair.z());
+    }
+
+    record BlockPair(ServerSubLevel host, net.minecraft.core.BlockPos hostBlock,
+                     ServerSubLevel guest, net.minecraft.core.BlockPos guestBlock) {}
+
+    static BlockPair closeBlocks(Hull host, Hull guest, double radius) {
+        var pair = closestPair(host, guest, Vec3.ZERO, radius);
+        if (pair == null) return null;
+        var a = (Node)pair.host();
+        var b = (Node)pair.guest();
+        return new BlockPair(a.part(), new net.minecraft.core.BlockPos(a.x(), a.y(), a.z()),
+            b.part(), new net.minecraft.core.BlockPos(b.x(), b.y(), b.z()));
+    }
+
+    private static Pair closestPair(Hull host, Hull guest, Vec3 offset, double radius) {
         if (host.root == null || guest.root == null) return null;
         var queue = new PriorityQueue<>(NEAREST_FIRST);
         double limit = radius * radius;
@@ -154,7 +171,7 @@ final class HullDistance {
             var pair = queue.remove();
             var a = pair.host();
             var b = pair.guest();
-            if (a.size() == 1 && b.size() == 1) return new Vec3(pair.x(), pair.y(), pair.z());
+            if (a.size() == 1 && b.size() == 1) return pair;
             if (a.size() >= b.size()) {
                 for (var child : a.children()) enqueue(queue, child, b, offset, limit);
             } else {
@@ -172,6 +189,13 @@ final class HullDistance {
         double z = delta(a.minZ, a.maxZ, b.minZ + offset.z, b.maxZ + offset.z);
         double distanceSquared = x * x + y * y + z * z;
         if (distanceSquared <= limit) queue.add(new Pair(host, guest, x, y, z, distanceSquared));
+    }
+
+    static double distanceSquared(AABB a, AABB b) {
+        double x = delta(a.minX, a.maxX, b.minX, b.maxX);
+        double y = delta(a.minY, a.maxY, b.minY, b.maxY);
+        double z = delta(a.minZ, a.maxZ, b.minZ, b.maxZ);
+        return x*x + y*y + z*z;
     }
 
     private static double delta(double aMin, double aMax, double bMin, double bMax) {

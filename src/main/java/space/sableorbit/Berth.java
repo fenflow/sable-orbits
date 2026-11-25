@@ -48,6 +48,7 @@ public final class Berth {
         r.getEntityData().set(GAP,gap);
         r.setPos(part.logicalPose().transformPosition(base(r,pos,gap)));
         r.setDeltaMovement(Vec3.ZERO);
+        if (arriving && gap == 0) Docking.keepBerthLoaded(dock);
         return false;
     }
 

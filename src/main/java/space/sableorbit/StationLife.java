@@ -1,7 +1,6 @@
 package space.sableorbit;
 
 import com.ntmspace.orbit.*;
-import com.ntmspace.tileentity.station.TileEntityOrbitalStationComputer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason;
@@ -36,9 +35,8 @@ public final class StationLife {
     public static boolean reserved(MinecraftServer server,int x,int z) {
         return OrbitSpaces.data(server).addresses.getCompound(key(x,z)).getBoolean("landed");
     }
-    private static boolean computer(List<ServerSubLevel> parts) {
-        return parts.stream().flatMap(s->s.getPlot().getLoadedChunks().stream())
-            .flatMap(c->c.getChunk().getBlockEntities().values().stream()).anyMatch(TileEntityOrbitalStationComputer.class::isInstance);
+    private static boolean computer(List<ServerSubLevel> parts, FlightTopology topology) {
+        return parts.stream().anyMatch(part -> topology.equipment(part).computer());
     }
     static boolean intact(ServerSubLevel part) {
         return part.getPlot().getLoadedChunks().stream().anyMatch(c-> java.util.Arrays.stream(c.getChunk().getSections()).anyMatch(section -> !section.hasOnlyAir()));
@@ -59,8 +57,10 @@ public final class StationLife {
             if(container==null) { ready=false; continue; }
             for(var id:container.getAllTickets().keySet()) if(container.getSubLevel(id)==null) ready=false;
             var all=Stations.loaded(level);
+            var checks = new Rendezvous.DistanceChecks(level);
+            var intactPlots = new IdentityHashMap<ServerSubLevel, Boolean>();
             for(var part:all) {
-                if(part.isRemoved() || !intact(part)) continue;
+                if(part.isRemoved() || !intactPlots.computeIfAbsent(part, StationLife::intact)) continue;
                 var t=Stations.info(part);
                 if(!t.hasUUID("root")) {
                     var parent=part.getSplitFromSubLevel();
@@ -71,6 +71,7 @@ public final class StationLife {
                         if(nearest.isPresent()) Stations.set(part,Stations.info(nearest.get()).copy());
                     }
                     t=Stations.info(part);
+                    if (t.hasUUID("root")) checks.invalidateGroups();
                 }
                 if(!t.hasUUID("root")) continue;
                 var root=Stations.root(part);
@@ -90,15 +91,19 @@ public final class StationLife {
                     root=part;
                     for(var key:List.of("guests","requests","host","publicVisit","guestLeave","hostLeave","decay")) t.remove(key);
                     t.putBoolean("public",true);
-                    if(!computer(Flight.group(part))) t.putLong("expires",server.overworld().getGameTime()+6000);
+                    checks.invalidateGroups();
+                    if(!computer(checks.parts(part), checks.topology())) t.putLong("expires",server.overworld().getGameTime()+6000);
                     t.putBoolean("needsHome",true);
                 }
                 var record=store.addresses.getCompound(key(t.getInt("x"),t.getInt("z")));
                 if ((root==null || root==part) && record.hasUUID("id") && !record.getUUID("id").equals(part.getUniqueId())) {
                     var other=Rendezvous.stations(server).stream().filter(s->s.getUniqueId().equals(record.getUUID("id"))).findFirst();
-                    if(other.isPresent()) { split(part,other.get());continue; }
+                    if (other.isPresent()) {
+                        if (split(part, other.get(), checks)) checks.invalidateTopology();
+                        continue;
+                    }
                 }
-                if(root==null || !intact(root)) {
+                if(root==null || !intactPlots.computeIfAbsent(root, StationLife::intact)) {
                     var lost=t.getUUID("root");
                     for(var member:all) {
                         var m=Stations.info(member);
@@ -111,10 +116,12 @@ public final class StationLife {
                         }
                     }
                     root=part;
+                    checks.invalidateGroups();
                 }
-                if(root!=part && root.logicalPose().position().distance(part.logicalPose().position())>250 && !Flight.group(root).contains(part)
-                    && HullDistance.closest(HullDistance.sections(root),HullDistance.sections(part),Vec3.ZERO,250)==null) {
-                    split(part,root);
+                if(root!=part && root.logicalPose().position().distanceSquared(part.logicalPose().position())>250*250
+                    && !checks.parts(root).contains(part)
+                    && HullDistance.closest(checks.hull(root), checks.hull(part), Vec3.ZERO, 250) == null) {
+                    if (split(part, root, checks)) checks.invalidateTopology();
                     continue;
                 }
                 var station=Stations.nativeStation(part);
@@ -126,26 +133,31 @@ public final class StationLife {
                     var name = "station_" + root.getUniqueId();
                     if (!level.dimension().equals(OrbitSpaces.key(name))) {
                         var p=root.logicalPose().position();
-                        var moved=OrbitSpaces.transfer(Flight.group(root),name,new Vec3(512-p.x,128-p.y,512-p.z));
-                        if(!moved.isEmpty()) for(var member:moved) Stations.info(member).remove("needsHome");
+                        var moved=OrbitSpaces.transfer(checks.parts(root),name,new Vec3(512-p.x,128-p.y,512-p.z));
+                        if (!moved.isEmpty()) {
+                            checks.invalidateTopology();
+                            for (var member : moved) Stations.info(member).remove("needsHome");
+                        }
                         continue;
                     }
                     t.remove("needsHome");
                 }
                 remember(root,t);
                 if(t.contains("expires")) {
-                    var physical=Flight.group(root,true);
+                    var physical=Flight.group(root, true, checks.topology());
                     var receiver=physical.stream().map(Stations::root).filter(Objects::nonNull).filter(other->
                         !Stations.info(other).contains("expires") && Stations.nativeStation(other)!=null).findFirst();
                     if(receiver.isPresent()) {
-                        for(var member:Flight.group(root)) Stations.set(member,Stations.info(receiver.get()).copy());
+                        for(var member:checks.parts(root)) Stations.set(member,Stations.info(receiver.get()).copy());
+                        checks.invalidateGroups();
                         deregister(nativeData,station); store.addresses.remove(address);store.setDirty();
                         continue;
                     }
                 }
-                if(t.contains("expires") && computer(Flight.group(root))) t.remove("expires");
+                if(t.contains("expires") && computer(checks.parts(root), checks.topology())) t.remove("expires");
                 if(t.contains("expires") && server.overworld().getGameTime()>=t.getLong("expires")) {
-                    for(var s:Flight.group(root)) container.removeSubLevel(s,SubLevelRemovalReason.REMOVED);
+                    for(var s:checks.parts(root)) container.removeSubLevel(s, SubLevelRemovalReason.REMOVED);
+                    checks.invalidateTopology();
                     present.remove(address);
                 }
             }
@@ -163,7 +175,7 @@ public final class StationLife {
             }
             if(!known.hasUUID("id") && !legacy) continue;
             if(known.contains("dimension")) {
-                var dim=server.getLevel(net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+                var dim=server.forgeGetWorldMap().get(net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
                     net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("sableorbits",known.getString("dimension"))));
                 if(dim!=null && Stations.loaded(dim).stream().noneMatch(StationLife::intact)) {
                     for(var player:List.copyOf(dim.players())) if(Orbit.isLandable(st.orbiting))
@@ -176,19 +188,19 @@ public final class StationLife {
         }
         for(var level:server.getAllLevels()) if(OrbitSpaces.isolated(level)) repairVisits(level);
     }
-    private static void split(ServerSubLevel part,ServerSubLevel original) {
+    private static boolean split(ServerSubLevel part, ServerSubLevel original, Rendezvous.DistanceChecks checks) {
         var server=part.getLevel().getServer();
         var parent=Stations.nativeStation(original);
-        if(parent==null) return;
-        var group=Flight.group(part);
-        boolean equipped=computer(group);
+        if(parent==null) return false;
+        var group=checks.parts(part);
+        boolean equipped=computer(group, checks.topology());
         var data=StationData.get(server);
         var addr=data.findFreeSpace();
-        if (data.getStationFromPosition(addr[0]*1024,addr[1]*1024) != null) return;
+        if (data.getStationFromPosition(addr[0]*1024,addr[1]*1024) != null) return false;
         var p=part.logicalPose().position();
         var moved=OrbitSpaces.transfer(group,OrbitSpaces.homeName(part.getLevel(),part.getUniqueId()),
             new Vec3(512-p.x,128-p.y,512-p.z));
-        if(moved.isEmpty()) return;
+        if(moved.isEmpty()) return false;
         var station=data.addStation(addr[0],addr[1],parent.orbiting);
         station.name=(equipped?"Station ":"Space debris ")+addr[0]+", "+addr[1];station.hasStation=true;
         var t=Stations.info(original).copy();
@@ -197,6 +209,7 @@ public final class StationLife {
         if(!equipped)t.putLong("expires",server.overworld().getGameTime()+6000);
         for(var s:moved)Stations.set(s,t.copy());
         data.setDirty();
+        return true;
     }
     private static void repairVisits(ServerLevel level) {
         var roots=new HashMap<UUID,ServerSubLevel>();
